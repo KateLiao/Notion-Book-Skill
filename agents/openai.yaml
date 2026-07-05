@@ -1,0 +1,5 @@
+interface:
+  display_name: "Notion Book Completer"
+  short_description: "初始化并维护 Notion 阅读数据库"
+  default_prompt: "Use $notion-book-completer to set up or complete my Notion reading database without overwriting existing content."
+

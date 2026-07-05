@@ -1,0 +1,5 @@
+.env
+notion-book-completer.config.json
+*.log
+.DS_Store
+
