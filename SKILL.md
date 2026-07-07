@@ -1,6 +1,6 @@
 ---
 name: notion-book-completer
-description: Set up, validate, and maintain a Notion reading database for books. Use when Codex needs to onboard a new user, create a Reading page and book database with views, connect an existing Notion reading database, add books, track reading status and progress, fill only empty metadata fields such as author, tags, summary, Douban link, total pages, cover image, finished date, import Apple Books highlights and notes, skip duplicate imports, verify image accessibility, and preserve existing user-entered content.
+description: Set up, validate, and maintain a Notion reading database for books across Codex, Hermes, and OpenClaw on macOS and Windows. Use when an agent needs to onboard a new user, create a Reading page and book database with views, connect an existing Notion reading database, add books, track reading status and progress, fill only empty metadata fields such as author, tags, summary, Douban link, total pages, cover image, finished date, import Apple Books highlights and notes, skip duplicate imports, verify image accessibility, and preserve existing user-entered content.
 ---
 
 # Notion Book Completer
@@ -14,6 +14,17 @@ Never print Notion tokens or Apple Books private contents. Preview only small sn
 ## Setup And Onboarding
 
 Use `scripts/onboard.mjs` when the user needs first-time setup, database initialization, or a guided check.
+
+This skill supports:
+
+- Codex: invoke as `$notion-book-completer`; metadata lives in `agents/openai.yaml`.
+- Hermes: invoke as `$notion-book`; metadata lives in `agents/hermes.yaml`.
+- OpenClaw: install as a local skill with this `SKILL.md`; metadata lives in `agents/openclaw.yaml`.
+- macOS and Windows for Notion setup, validation, and book tracking.
+- macOS only for Apple Books import.
+
+For cross-platform shell, path, TLS, and `.env` issues, read `references/windows-compat.md`.
+For Notion API version, data source, formula, and view quirks, read `references/notion-api-quirks.md`.
 
 The onboarding path must:
 
@@ -36,6 +47,8 @@ NOTION_READING_PARENT_PAGE_ID=...
 NOTION_READING_DATABASE_ID=...
 NOTION_READING_DATA_SOURCE_ID=...
 ```
+
+Scripts resolve paths relative to the skill root, not the shell's current working directory. Keep `.env` and `notion-book-completer.config.json` in the skill root. Use `--env-path <path>` only when the user intentionally keeps credentials elsewhere.
 
 Use Notion API version `2026-03-11` for setup and views. Use data source APIs for new setup, and accept older database IDs only as compatibility inputs.
 
@@ -99,6 +112,7 @@ Append page-body content as Notion blocks:
 - `scripts/onboard.mjs`: Chinese first-run setup.
 - `scripts/check_setup.mjs`: Read-only setup validation.
 - `scripts/init_notion_database.mjs`: Create the Reading page, data source, and views.
-- `scripts/notion_book_completer.mjs`: Shared helpers for Notion requests, config, schema validation, safe patches, title lookup, and image checks.
+- `scripts/notion_book_completer.mjs`: Shared helpers plus CLI commands such as `add-books` and `complete-metadata`.
 - `scripts/apple_books_notes_to_notion.mjs`: Optional macOS Apple Books import.
 
+Use forward-slash examples for macOS and backslash examples for Windows in user-facing instructions. Never suggest disabling TLS verification unless the user explicitly accepts that risk.

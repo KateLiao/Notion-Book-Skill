@@ -1,0 +1,12 @@
+interface:
+  display_name: "Notion Book"
+  short_description: "Set up and maintain a Notion reading database"
+  default_prompt: "Use this Notion Book skill to set up or manage my Notion reading database without overwriting existing content."
+
+platform:
+  name: "openclaw"
+  invoke_syntax: "notion book"
+  recommended_skill_dir:
+    macos: "~/.openclaw/skills/notion-book"
+    windows: "%USERPROFILE%\\.openclaw\\skills\\notion-book"
+

@@ -6,13 +6,15 @@ import {
   loadEnv,
   loadNotionToken,
   listViews,
+  parseCommonArgs,
   saveConfig,
   mergeSetupConfig,
 } from "./notion_book_completer.mjs";
 
 async function main() {
-  const env = loadEnv();
-  const token = loadNotionToken();
+  const args = parseCommonArgs(process.argv.slice(2));
+  const env = loadEnv(args.envPath || undefined);
+  const token = loadNotionToken(args.envPath || undefined);
   if (!token) {
     console.error("未找到 NOTION_TOKEN。请复制 .env.example 为 .env，并填入你的 Notion integration token。");
     process.exit(1);
@@ -53,4 +55,3 @@ main().catch((error) => {
   console.error(`检查失败：${error.message}`);
   process.exit(1);
 });
-

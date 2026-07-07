@@ -2,6 +2,9 @@
 
 Use this reference when setting up, validating, or repairing a user's Notion reading database.
 
+For platform-specific install/path notes, read `windows-compat.md`.
+For API-specific view/formula behavior, read `notion-api-quirks.md`.
+
 ## Canonical Reading Page
 
 Create a page titled `Reading` under the user-provided parent page. Add:
@@ -59,6 +62,8 @@ Use property IDs from the newly created data source. Never copy property IDs fro
 - Finished gallery: cover property `书籍封面`
 - To Read List table: `Status = To read list`
 
+If the Notion API rejects formula sorting during initialization, keep the view and fall back to `last_edited_time`; report this in Chinese instead of abandoning the whole setup.
+
 ## Existing Database Validation
 
 If a user already has a database:
@@ -67,4 +72,3 @@ If a user already has a database:
 - Save the actual property names and IDs in config.
 - Do not rename or delete existing properties automatically.
 - If a required property is missing or has the wrong type, explain the exact fix in Chinese.
-

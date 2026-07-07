@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const NOTION_VERSION = "2026-03-11";
-export const CONFIG_PATH = "notion-book-completer.config.json";
+export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+export const SKILL_DIR = path.resolve(SCRIPT_DIR, "..");
+export const CONFIG_PATH = path.join(SKILL_DIR, "notion-book-completer.config.json");
 
 export const CANONICAL_PROPERTIES = {
   title: "Name",
@@ -79,10 +82,20 @@ export const EXPECTED_TYPES = {
   finishedDate: "date",
 };
 
-export function loadEnv(envPath = ".env") {
+export function parseCommonArgs(argv = []) {
+  const args = { envPath: null, remaining: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const value = argv[i];
+    if (value === "--env-path") args.envPath = argv[++i];
+    else args.remaining.push(value);
+  }
+  return args;
+}
+
+export function loadEnv(envPath = path.join(SKILL_DIR, ".env")) {
   const values = {};
   if (fs.existsSync(envPath)) {
-    const text = fs.readFileSync(envPath, "utf8");
+    const text = fs.readFileSync(envPath, "utf8").replace(/^\uFEFF/, "");
     for (const line of text.split(/\r?\n/)) {
       const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
       if (!match || line.trim().startsWith("#")) continue;
@@ -92,7 +105,7 @@ export function loadEnv(envPath = ".env") {
   return { ...values, ...process.env };
 }
 
-export function loadNotionToken(envPath = ".env") {
+export function loadNotionToken(envPath = path.join(SKILL_DIR, ".env")) {
   return loadEnv(envPath).NOTION_TOKEN || null;
 }
 
@@ -226,6 +239,14 @@ export function progressFormula() {
   ].join("");
 }
 
+export function readingPropertiesSchemaWithoutFormula() {
+  const schema = {};
+  for (const [name, value] of Object.entries(readingPropertiesSchema())) {
+    if (name !== "阅读进度") schema[name] = value;
+  }
+  return schema;
+}
+
 export function readingPropertiesSchema() {
   return {
     Name: { title: {} },
@@ -272,6 +293,19 @@ export function mapProperties(properties = {}) {
   return { propertyMap: result, propertyIds: ids, issues };
 }
 
+export function applyProgressFormulaEvidence(mapped, config = {}) {
+  if (!config.progressFormulaPatched) return mapped;
+  const issues = mapped.issues.filter((issue) => !issue.includes("阅读进度"));
+  return {
+    ...mapped,
+    propertyMap: {
+      ...mapped.propertyMap,
+      progress: mapped.propertyMap.progress || "阅读进度",
+    },
+    issues,
+  };
+}
+
 export async function retrieveDataSource(token, dataSourceId) {
   return notionRequest(token, "GET", `/data_sources/${dataSourceId}`);
 }
@@ -297,7 +331,7 @@ export async function discoverReadingTarget(token, config = {}, env = loadEnv())
   const dataSourceId = config.dataSourceId || env.NOTION_READING_DATA_SOURCE_ID;
   if (dataSourceId) {
     const dataSource = await retrieveDataSource(token, dataSourceId);
-    const mapped = mapProperties(dataSource.properties || {});
+    const mapped = applyProgressFormulaEvidence(mapProperties(dataSource.properties || {}), config);
     return {
       source: "config-data-source",
       dataSource,
@@ -312,7 +346,7 @@ export async function discoverReadingTarget(token, config = {}, env = loadEnv())
     const firstDataSource = database.data_sources?.[0];
     if (firstDataSource?.id) {
       const dataSource = await retrieveDataSource(token, firstDataSource.id);
-      const mapped = mapProperties(dataSource.properties || {});
+      const mapped = applyProgressFormulaEvidence(mapProperties(dataSource.properties || {}), config);
       return { source: "config-database", databaseId: database.id, dataSource, ...mapped };
     }
   }
@@ -321,7 +355,7 @@ export async function discoverReadingTarget(token, config = {}, env = loadEnv())
     const result = await searchNotion(token, query, "data_source");
     for (const item of result.results || []) {
       const dataSource = item.object === "data_source" ? item : await retrieveDataSource(token, item.id);
-      const mapped = mapProperties(dataSource.properties || {});
+      const mapped = applyProgressFormulaEvidence(mapProperties(dataSource.properties || {}), config);
       if (mapped.issues.length === 0 || dataSource.name === "书籍总览") {
         return {
           source: "search",
@@ -431,5 +465,91 @@ export async function createTrackedReadingBook(token, target, book) {
 }
 
 export function resolveScriptDir(importMetaUrl) {
-  return path.dirname(new URL(importMetaUrl).pathname);
+  return path.dirname(fileURLToPath(importMetaUrl));
+}
+
+function usage() {
+  console.error("Usage:");
+  console.error("  node scripts/notion_book_completer.mjs add-books [--status Reading] [--env-path .env] <title1> [title2 ...]");
+  console.error("  node scripts/notion_book_completer.mjs complete-metadata [--env-path .env] <title1> [title2 ...]");
+}
+
+async function cli(argv) {
+  const command = argv[0];
+  const parsed = parseCommonArgs(argv.slice(1));
+  const args = parsed.remaining;
+
+  if (!command || command === "--help" || command === "-h") {
+    usage();
+    return;
+  }
+
+  if (command !== "add-books" && command !== "complete-metadata") {
+    console.error(`Unknown command: ${command}`);
+    usage();
+    process.exit(1);
+  }
+
+  let status = "Reading";
+  const titles = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--status") status = args[++i];
+    else if (args[i] === "--titles") {
+      while (i + 1 < args.length && !args[i + 1].startsWith("--")) titles.push(args[++i]);
+    } else if (!args[i].startsWith("--")) {
+      titles.push(args[i]);
+    }
+  }
+
+  if (titles.length === 0) {
+    usage();
+    process.exit(1);
+  }
+
+  const token = loadNotionToken(parsed.envPath || undefined);
+  if (!token) throw new Error("Missing NOTION_TOKEN.");
+
+  const env = loadEnv(parsed.envPath || undefined);
+  const target = await discoverReadingTarget(token, loadConfig(), env);
+  if (!target || target.issues.length > 0) {
+    throw new Error("没有找到可用的 Notion 阅读数据库。请先运行：node scripts/onboard.mjs");
+  }
+
+  if (command === "complete-metadata") {
+    const results = [];
+    for (const title of titles) {
+      const pages = await findBookByNormalizedTitle(token, target, title);
+      results.push(
+        pages.length === 0
+          ? { title, error: "未在数据库中找到此书" }
+          : {
+              title,
+              pageId: pages[0].id,
+              url: pages[0].url,
+              note: "请让 Agent 先检索并验证作者、标签、摘要、豆瓣链接、页数、封面 URL；然后只补空字段。",
+            },
+      );
+    }
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+
+  const results = [];
+  for (const title of titles) {
+    const result = await createTrackedReadingBook(token, target, { title, status, readPages: 0 });
+    results.push({
+      title,
+      action: result.action,
+      pageId: result.page.id,
+      url: result.page.url,
+    });
+  }
+  console.log(JSON.stringify(results, null, 2));
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  cli(process.argv.slice(2)).catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
 }

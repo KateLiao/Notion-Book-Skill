@@ -11,6 +11,7 @@ import {
   loadEnv,
   loadNotionToken,
   notionRequest,
+  parseCommonArgs,
   pageTitle,
   richTextPlain,
 } from "./notion_book_completer.mjs";
@@ -19,6 +20,7 @@ const APPLE_EPOCH_OFFSET = 978307200;
 const DEFAULT_HEADING = "Apple Books 高亮与笔记";
 
 function parseArgs(argv) {
+  const common = parseCommonArgs(argv);
   const args = {
     title: null,
     author: null,
@@ -28,15 +30,16 @@ function parseArgs(argv) {
     readPages: null,
     force: false,
     dryRun: false,
+    envPath: common.envPath,
   };
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const value = argv[i];
-    if (value === "--author") args.author = argv[++i];
-    else if (value === "--status") args.status = argv[++i];
-    else if (value === "--finish-date") args.finishDate = argv[++i];
-    else if (value === "--total-pages") args.totalPages = Number(argv[++i]);
-    else if (value === "--read-pages") args.readPages = Number(argv[++i]);
+  for (let i = 0; i < common.remaining.length; i += 1) {
+    const value = common.remaining[i];
+    if (value === "--author") args.author = common.remaining[++i];
+    else if (value === "--status") args.status = common.remaining[++i];
+    else if (value === "--finish-date") args.finishDate = common.remaining[++i];
+    else if (value === "--total-pages") args.totalPages = Number(common.remaining[++i]);
+    else if (value === "--read-pages") args.readPages = Number(common.remaining[++i]);
     else if (value === "--force") args.force = true;
     else if (value === "--dry-run") args.dryRun = true;
     else if (!args.title) args.title = value;
@@ -229,10 +232,10 @@ async function patchRequestedProperties(token, pageId, target, args) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const token = loadNotionToken();
+  const token = loadNotionToken(args.envPath || undefined);
   if (!token) throw new Error("Missing NOTION_TOKEN.");
 
-  const target = await discoverReadingTarget(token, loadConfig(), loadEnv());
+  const target = await discoverReadingTarget(token, loadConfig(), loadEnv(args.envPath || undefined));
   if (!target || target.issues.length > 0) {
     throw new Error("没有找到可用的 Notion 阅读数据库。请先运行 node scripts/onboard.mjs。");
   }
@@ -275,4 +278,3 @@ main().catch((error) => {
   console.error(error.message);
   process.exit(1);
 });
-

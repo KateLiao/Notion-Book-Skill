@@ -2,13 +2,16 @@
 import {
   CONFIG_PATH,
   CANONICAL_PROPERTIES,
+  applyProgressFormulaEvidence,
   loadConfig,
   loadEnv,
   loadNotionToken,
   mapProperties,
   mergeSetupConfig,
   notionRequest,
-  readingPropertiesSchema,
+  parseCommonArgs,
+  progressFormula,
+  readingPropertiesSchemaWithoutFormula,
   richTextPlain,
   saveConfig,
   text,
@@ -17,14 +20,16 @@ import {
 import { fileURLToPath } from "node:url";
 
 function parseArgs(argv) {
+  const common = parseCommonArgs(argv);
   const args = {
     parentPageId: null,
     dryRun: false,
     force: false,
+    envPath: common.envPath,
   };
-  for (let i = 0; i < argv.length; i += 1) {
-    const value = argv[i];
-    if (value === "--parent-page-id") args.parentPageId = argv[++i];
+  for (let i = 0; i < common.remaining.length; i += 1) {
+    const value = common.remaining[i];
+    if (value === "--parent-page-id") args.parentPageId = common.remaining[++i];
     else if (value === "--dry-run") args.dryRun = true;
     else if (value === "--force") args.force = true;
     else throw new Error(`未知参数：${value}`);
@@ -100,10 +105,12 @@ async function children(token, blockId) {
 }
 
 function viewPropertyConfiguration(ids, visibleKeys) {
-  return Object.entries(ids).map(([key, propertyId]) => ({
-    property_id: propertyId,
-    visible: visibleKeys.includes(key),
-  }));
+  return Object.entries(ids)
+    .filter(([, propertyId]) => propertyId)
+    .map(([key, propertyId]) => ({
+      property_id: propertyId,
+      visible: visibleKeys.includes(key),
+    }));
 }
 
 async function createView(token, body) {
@@ -111,7 +118,34 @@ async function createView(token, body) {
 }
 
 function filterByStatus(statusPropertyId, status) {
+  if (!statusPropertyId) return undefined;
   return { property: statusPropertyId, select: { equals: status } };
+}
+
+async function patchProgressFormula(token, databaseId, dataSourceId) {
+  const payload = {
+    properties: {
+      阅读进度: { formula: { expression: progressFormula() } },
+    },
+  };
+  try {
+    return await notionRequest(token, "PATCH", `/data_sources/${dataSourceId}`, payload);
+  } catch (dataSourceError) {
+    try {
+      return await notionRequest(token, "PATCH", `/databases/${databaseId}`, payload);
+    } catch {
+      throw dataSourceError;
+    }
+  }
+}
+
+async function makeView(token, body, label) {
+  try {
+    return await createView(token, body);
+  } catch (error) {
+    console.warn(`视图「${label}」创建失败：${error.message}`);
+    return {};
+  }
 }
 
 async function createDatabaseAndViews(token, pageId) {
@@ -121,7 +155,7 @@ async function createDatabaseAndViews(token, pageId) {
     is_inline: true,
     initial_data_source: {
       title: titleText("书籍总览"),
-      properties: readingPropertiesSchema(),
+      properties: readingPropertiesSchemaWithoutFormula(),
     },
   });
 
@@ -130,10 +164,13 @@ async function createDatabaseAndViews(token, pageId) {
     throw new Error("Notion 没有返回 data_source_id，无法继续创建视图。");
   }
 
+  await patchProgressFormula(token, database.id, dataSourceId);
+
   const dataSource = await notionRequest(token, "GET", `/data_sources/${dataSourceId}`);
-  const mapped = mapProperties(dataSource.properties || {});
-  if (mapped.issues.length > 0) {
-    throw new Error(`新建数据库字段校验失败：${mapped.issues.join(" ")}`);
+  const mapped = applyProgressFormulaEvidence(mapProperties(dataSource.properties || {}), { progressFormulaPatched: true });
+  const criticalIssues = mapped.issues.filter((issue) => !issue.includes("阅读进度"));
+  if (criticalIssues.length > 0) {
+    throw new Error(`新建数据库字段校验失败：${criticalIssues.join(" ")}`);
   }
 
   const ids = mapped.propertyIds;
@@ -141,7 +178,7 @@ async function createDatabaseAndViews(token, pageId) {
   const databaseId = database.id;
 
   const views = {};
-  views.readingTable = await createView(token, {
+  views.readingTable = await makeView(token, {
     database_id: databaseId,
     data_source_id: dataSourceId,
     name: "Reading",
@@ -151,66 +188,64 @@ async function createDatabaseAndViews(token, pageId) {
       type: "table",
       properties: viewPropertyConfiguration(ids, ["title", "author", "tags", "cover", "progress"]),
     },
-  });
-  views.readingGallery = await createView(token, {
+  }, "Reading");
+  views.readingGallery = await makeView(token, {
     database_id: databaseId,
     data_source_id: dataSourceId,
     name: "Reading Gallery",
     type: "gallery",
     filter: statusFilter("Reading"),
-    sorts: [{ property: ids.progress, direction: "ascending" }],
+    sorts: ids.progress ? [{ property: ids.progress, direction: "ascending" }] : [{ timestamp: "last_edited_time", direction: "ascending" }],
     configuration: {
       type: "gallery",
       properties: viewPropertyConfiguration(ids, ["title", "progress"]),
-      cover: { type: "property", property_id: ids.cover },
+      cover: ids.cover ? { type: "property", property_id: ids.cover } : undefined,
       cover_aspect: "contain",
     },
-  });
+  }, "Reading Gallery");
 
   await appendBlocks(token, pageId, columnBlocks());
   const pageChildren = await children(token, pageId);
   const columnList = pageChildren.find((block) => block.type === "column_list");
-  const columns = columnList ? await children(token, columnList.id) : [];
-  const finishedColumn = columns[0]?.id;
-  const toReadColumn = columns[1]?.id;
+  if (columnList) await children(token, columnList.id);
 
-  views.finishedTable = await createView(token, {
+  views.finishedTable = await makeView(token, {
     data_source_id: dataSourceId,
     name: "Finished",
     type: "table",
-    create_database: { parent: { type: "block_id", block_id: finishedColumn || pageId } },
+    create_database: { parent: { type: "page_id", page_id: pageId } },
     filter: statusFilter("Finished"),
-    sorts: [{ property: ids.finishedDate, direction: "descending" }],
+    sorts: ids.finishedDate ? [{ property: ids.finishedDate, direction: "descending" }] : [{ timestamp: "last_edited_time", direction: "descending" }],
     configuration: {
       type: "table",
       properties: viewPropertyConfiguration(ids, ["title", "score", "finishedDate", "summary", "author", "tags", "cover", "doubanLink"]),
     },
-  });
+  }, "Finished");
   const finishedLinkedDatabaseId = views.finishedTable.parent?.database_id || databaseId;
-  views.finishedGallery = await createView(token, {
+  views.finishedGallery = await makeView(token, {
     data_source_id: dataSourceId,
     name: "Finished Gallery",
     type: "gallery",
     database_id: finishedLinkedDatabaseId,
     filter: statusFilter("Finished"),
-    sorts: [{ property: ids.finishedDate, direction: "descending" }],
+    sorts: ids.finishedDate ? [{ property: ids.finishedDate, direction: "descending" }] : [{ timestamp: "last_edited_time", direction: "descending" }],
     configuration: {
       type: "gallery",
-      cover: { type: "property", property_id: ids.cover },
+      cover: ids.cover ? { type: "property", property_id: ids.cover } : undefined,
       cover_aspect: "contain",
     },
-  });
-  views.toReadTable = await createView(token, {
+  }, "Finished Gallery");
+  views.toReadTable = await makeView(token, {
     data_source_id: dataSourceId,
     name: "To Read List",
     type: "table",
-    create_database: { parent: { type: "block_id", block_id: toReadColumn || pageId } },
+    create_database: { parent: { type: "page_id", page_id: pageId } },
     filter: statusFilter("To read list"),
     configuration: {
       type: "table",
       properties: viewPropertyConfiguration(ids, ["title", "tags", "doubanLink", "progress"]),
     },
-  });
+  }, "To Read List");
 
   return {
     database,
@@ -240,8 +275,8 @@ export async function initializeReadingWorkspace(token, parentPageId) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const env = loadEnv();
-  const token = loadNotionToken();
+  const env = loadEnv(args.envPath || undefined);
+  const token = loadNotionToken(args.envPath || undefined);
   const parentPageId = args.parentPageId || env.NOTION_READING_PARENT_PAGE_ID;
 
   if (args.dryRun) {
@@ -277,6 +312,7 @@ async function main() {
     dataSourceName: result.dataSource.name || richTextPlain(result.dataSource.title || []) || "书籍总览",
     propertyMap: result.propertyMap,
     propertyIds: result.propertyIds,
+    progressFormulaPatched: true,
     views: viewIds,
   });
   saveConfig(nextConfig, CONFIG_PATH);

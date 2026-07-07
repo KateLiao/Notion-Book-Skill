@@ -9,6 +9,7 @@ import {
   loadEnv,
   loadNotionToken,
   mergeSetupConfig,
+  parseCommonArgs,
   saveConfig,
 } from "./notion_book_completer.mjs";
 import { initializeReadingWorkspace } from "./init_notion_database.mjs";
@@ -23,11 +24,12 @@ async function ask(question) {
 }
 
 async function main() {
+  const args = parseCommonArgs(process.argv.slice(2));
   console.log("Notion Book Completer 初始化向导");
   console.log("我会先检查现有配置；如果没有可用数据库，会帮你创建 Reading 页面和书籍总览数据库。");
 
-  const env = loadEnv();
-  const token = loadNotionToken();
+  const env = loadEnv(args.envPath || undefined);
+  const token = loadNotionToken(args.envPath || undefined);
   if (!token) {
     console.error("未找到 NOTION_TOKEN。请复制 .env.example 为 .env，并填入你的 Notion integration token。");
     process.exit(1);
@@ -83,6 +85,7 @@ async function main() {
     dataSourceName: result.dataSource.name || "书籍总览",
     propertyMap: result.propertyMap,
     propertyIds: result.propertyIds,
+    progressFormulaPatched: true,
     views: viewIds,
   });
   saveConfig(nextConfig, CONFIG_PATH);
@@ -97,4 +100,3 @@ main().catch((error) => {
   console.error("请确认 integration 已连接到父页面，并具备 insert content / update content 权限。");
   process.exit(1);
 });
-
