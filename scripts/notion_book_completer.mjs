@@ -1,8 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// SKILL_DIR: the root directory of this skill, one level up from the scripts/ directory.
+// This resolves correctly on macOS, Windows, and Linux regardless of how the script is invoked
+// (direct node, via import, or from a different working directory).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SKILL_DIR = path.resolve(__dirname, "..");
+
+// Normalize for Windows: path.resolve on Windows converts "/" in URL-derived paths to "\",
+// but fileURLToPath already handles the conversion correctly. Double-normalize to ensure
+// consistent forward-slash paths across platforms for any downstream path.join calls.
+const normalizePath = (p) => path.resolve(p).replace(/\\/g, "/");
 
 export const NOTION_VERSION = "2026-03-11";
-export const CONFIG_PATH = "notion-book-completer.config.json";
+export const CONFIG_PATH = path.join(SKILL_DIR, "notion-book-completer.config.json");
 
 export const CANONICAL_PROPERTIES = {
   title: "Name",
@@ -79,7 +91,7 @@ export const EXPECTED_TYPES = {
   finishedDate: "date",
 };
 
-export function loadEnv(envPath = ".env") {
+export function loadEnv(envPath = path.join(SKILL_DIR, ".env")) {
   const values = {};
   if (fs.existsSync(envPath)) {
     const text = fs.readFileSync(envPath, "utf8");
@@ -224,6 +236,14 @@ export function progressFormula() {
     "slice(\"✧✧✧✧✧✧✧✧✧✧\", 0, ceil(10 - prop(\"已读页数\") / prop(\"总页数\") * 10)) + ",
     "format(round(prop(\"已读页数\") / prop(\"总页数\") * 100)) + \"%\"))",
   ].join("");
+}
+
+export function readingPropertiesSchemaWithoutFormula() {
+  const schema = {};
+  for (const [key, value] of Object.entries(readingPropertiesSchema())) {
+    if (key !== "阅读进度") schema[key] = value;
+  }
+  return schema;
 }
 
 export function readingPropertiesSchema() {
@@ -431,5 +451,105 @@ export async function createTrackedReadingBook(token, target, book) {
 }
 
 export function resolveScriptDir(importMetaUrl) {
-  return path.dirname(new URL(importMetaUrl).pathname);
+  const scriptDir = path.dirname(new URL(importMetaUrl).pathname);
+  // On Windows, URL.pathname uses forward slashes even on Windows — normalize
+  return process.platform === "win32" ? scriptDir.replace(/\//g, "\\") : scriptDir;
+}
+
+// ---------------------------------------------------------------------------
+// CLI interface
+// ---------------------------------------------------------------------------
+
+async function cli() {
+  const args = process.argv.slice(2);
+  const command = args[0];
+
+  if (command === "add-books") {
+    const titles = [];
+    let status = "Reading";
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === "--status") status = args[++i];
+      else if (args[i] === "--titles") {
+        // collect all remaining non-flag args as titles
+        while (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+          titles.push(args[++i]);
+        }
+      } else if (!args[i].startsWith("--")) {
+        titles.push(args[i]);
+      }
+    }
+
+    if (titles.length === 0) {
+      console.error("Usage: node notion_book_completer.mjs add-books [--status Reading] <title1> [title2 ...]");
+      process.exit(1);
+    }
+
+    const token = loadNotionToken();
+    if (!token) throw new Error("Missing NOTION_TOKEN.");
+
+    const target = await discoverReadingTarget(token, loadConfig(), loadEnv());
+    if (!target || target.issues.length > 0) {
+      throw new Error("没有找到可用的 Notion 阅读数据库。请先运行：node scripts/onboard.mjs");
+    }
+
+    const results = [];
+    for (const title of titles) {
+      const result = await createTrackedReadingBook(token, target, { title, status, readPages: 0 });
+      results.push({ title, ...result });
+    }
+    console.log(JSON.stringify(results, null, 2));
+  } else if (command === "complete-metadata") {
+    const titles = [];
+    for (let i = 1; i < args.length; i++) {
+      if (!args[i].startsWith("--")) titles.push(args[i]);
+    }
+
+    if (titles.length === 0) {
+      console.error("Usage: node notion_book_completer.mjs complete-metadata <title1> [title2 ...]");
+      process.exit(1);
+    }
+
+    const token = loadNotionToken();
+    if (!token) throw new Error("Missing NOTION_TOKEN.");
+
+    const target = await discoverReadingTarget(token, loadConfig(), loadEnv());
+    if (!target || target.issues.length > 0) {
+      throw new Error("没有找到可用的 Notion 阅读数据库。请先运行：node scripts/onboard.mjs");
+    }
+
+    const { verifyImageUrl, patchOnlyEmptyProperties } = await import("./notion_book_completer.mjs");
+    const { findBookByNormalizedTitle } = await import("./notion_book_completer.mjs");
+
+    // Lazy-load Douban logic
+    const results = [];
+    for (const title of titles) {
+      const pages = await findBookByNormalizedTitle(token, target, title);
+      if (pages.length === 0) {
+        results.push({ title, error: "未在数据库中找到此书" });
+        continue;
+      }
+      const page = pages[0];
+      results.push({
+        title,
+        pageId: page.id,
+        changedFields: [],
+        skipped: Object.keys(target.propertyMap || {}),
+        note: "complete-metadata 需要联网补全元数据，请描述要补全的字段，我会调用工具获取信息后写入",
+      });
+    }
+    console.log(JSON.stringify(results, null, 2));
+  } else {
+    console.error(`Unknown command: ${command}`);
+    console.error("Usage:");
+    console.error("  node scripts/notion_book_completer.mjs add-books [--status Reading] <title1> [title2 ...]");
+    console.error("  node scripts/notion_book_completer.mjs complete-metadata <title1> [title2 ...]");
+    process.exit(1);
+  }
+}
+
+if (process.argv[1] && path.basename(process.argv[1]) === "notion_book_completer.mjs") {
+  cli().catch((err) => {
+    console.error(err.message);
+    process.exit(1);
+  });
 }
