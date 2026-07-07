@@ -1,0 +1,12 @@
+interface:
+  display_name: "Notion Book Completer"
+  short_description: "Set up and maintain a Notion reading database. Add books, fill metadata/covers, import Apple Books highlights — never overwrites existing content."
+  default_prompt: "Use the notion-book skill to set up or manage my Notion reading database without overwriting any existing content."
+
+platforms:
+  hermes:
+    invoke_syntax: "$notion-book"
+    skill_name: "notion-book"
+  codex:
+    invoke_syntax: "$notion-book-completer"
+    skill_name: "notion-book-completer"

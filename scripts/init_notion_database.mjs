@@ -8,7 +8,9 @@ import {
   mapProperties,
   mergeSetupConfig,
   notionRequest,
+  progressFormula,
   readingPropertiesSchema,
+  readingPropertiesSchemaWithoutFormula,
   richTextPlain,
   saveConfig,
   text,
@@ -100,10 +102,12 @@ async function children(token, blockId) {
 }
 
 function viewPropertyConfiguration(ids, visibleKeys) {
-  return Object.entries(ids).map(([key, propertyId]) => ({
-    property_id: propertyId,
-    visible: visibleKeys.includes(key),
-  }));
+  return Object.entries(ids)
+    .filter(([, id]) => id != null)
+    .map(([key, propertyId]) => ({
+      property_id: propertyId,
+      visible: visibleKeys.includes(key),
+    }));
 }
 
 async function createView(token, body) {
@@ -111,7 +115,17 @@ async function createView(token, body) {
 }
 
 function filterByStatus(statusPropertyId, status) {
+  if (!statusPropertyId) return null;
   return { property: statusPropertyId, select: { equals: status } };
+}
+
+async function safeCreateView(token, databaseId, dataSourceId, name, type, body) {
+  try {
+    return await createView(token, { database_id: databaseId, data_source_id: dataSourceId, name, type, ...body });
+  } catch (err) {
+    console.warn(`  视图「${name}」创建失败（${err.message}），跳过`);
+    return {};
+  }
 }
 
 async function createDatabaseAndViews(token, pageId) {
@@ -121,7 +135,7 @@ async function createDatabaseAndViews(token, pageId) {
     is_inline: true,
     initial_data_source: {
       title: titleText("书籍总览"),
-      properties: readingPropertiesSchema(),
+      properties: readingPropertiesSchemaWithoutFormula(),
     },
   });
 
@@ -130,39 +144,75 @@ async function createDatabaseAndViews(token, pageId) {
     throw new Error("Notion 没有返回 data_source_id，无法继续创建视图。");
   }
 
-  const dataSource = await notionRequest(token, "GET", `/data_sources/${dataSourceId}`);
-  const mapped = mapProperties(dataSource.properties || {});
-  if (mapped.issues.length > 0) {
-    throw new Error(`新建数据库字段校验失败：${mapped.issues.join(" ")}`);
+  // Notion API: formula cannot be in initial_data_source; add it via PATCH after creation
+  await notionRequest(token, "PATCH", `/databases/${database.id}`, {
+    properties: { 阅读进度: { formula: { expression: progressFormula() } } },
+  });
+
+  // Re-fetch data_source; note formula type may not appear in data_source properties
+  // (Notion API limitation: formula properties added via PATCH don't show in data_source schema).
+  // We treat a successful PATCH response as sufficient evidence the formula was added.
+  // Only validate non-formula fields against data_source properties.
+  let dataSource;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    dataSource = await notionRequest(token, "GET", `/data_sources/${dataSourceId}`);
+    const nonFormulaIssues = (mapProperties(dataSource.properties || {}).issues || []).filter(
+      (issue) => !issue.includes("阅读进度"),
+    );
+    if (nonFormulaIssues.length === 0) break;
+    if (attempt < 4) console.warn(`  重试字段校验 (${attempt + 1}/5)...`);
   }
 
+  const mapped = mapProperties(dataSource.properties || {});
+  const criticalIssues = mapped.issues.filter((issue) => !issue.includes("阅读进度"));
+  if (criticalIssues.length > 0) {
+    throw new Error(`新建数据库字段校验失败：${criticalIssues.join(" ")}`);
+  }
   const ids = mapped.propertyIds;
-  const statusFilter = (status) => filterByStatus(ids.status, status);
+  const status = ids.status;
+  const statusFilterFn = (s) => status ? { property: status, select: { equals: s } } : null;
   const databaseId = database.id;
 
   const views = {};
-  views.readingTable = await createView(token, {
-    database_id: databaseId,
-    data_source_id: dataSourceId,
-    name: "Reading",
-    type: "table",
-    filter: statusFilter("Reading"),
+
+  // Helper to build a view safely
+  // Views with create_database: data_source_id + create_database (no database_id)
+  // Views on existing database: database_id + data_source_id
+  async function makeView(name, type, opts = {}) {
+    const useCreateDatabase = opts.create_database != null;
+    const body = useCreateDatabase
+      ? { data_source_id: dataSourceId, name, type, ...opts }
+      : { database_id: databaseId, data_source_id: dataSourceId, name, type, ...opts };
+    for (const key of Object.keys(body)) {
+      if (body[key] === undefined) delete body[key];
+    }
+    try {
+      return await createView(token, body);
+    } catch (err) {
+      console.warn(`  视图「${name}」创建失败（${err.message}），跳过`);
+      return {};
+    }
+  }
+
+  // Reading table view
+  const readingFilter = statusFilterFn("Reading");
+  views.readingTable = await makeView("Reading", "table", {
+    filter: readingFilter,
     configuration: {
       type: "table",
       properties: viewPropertyConfiguration(ids, ["title", "author", "tags", "cover", "progress"]),
     },
   });
-  views.readingGallery = await createView(token, {
-    database_id: databaseId,
-    data_source_id: dataSourceId,
-    name: "Reading Gallery",
-    type: "gallery",
-    filter: statusFilter("Reading"),
-    sorts: [{ property: ids.progress, direction: "ascending" }],
+
+  // Reading gallery view
+  views.readingGallery = await makeView("Reading Gallery", "gallery", {
+    filter: readingFilter,
+    sorts: [{ timestamp: "last_edited_time", direction: "ascending" }],
     configuration: {
       type: "gallery",
       properties: viewPropertyConfiguration(ids, ["title", "progress"]),
-      cover: { type: "property", property_id: ids.cover },
+      cover: ids.cover ? { type: "property", property_id: ids.cover } : undefined,
       cover_aspect: "contain",
     },
   });
@@ -174,38 +224,36 @@ async function createDatabaseAndViews(token, pageId) {
   const finishedColumn = columns[0]?.id;
   const toReadColumn = columns[1]?.id;
 
-  views.finishedTable = await createView(token, {
-    data_source_id: dataSourceId,
-    name: "Finished",
-    type: "table",
-    create_database: { parent: { type: "block_id", block_id: finishedColumn || pageId } },
-    filter: statusFilter("Finished"),
-    sorts: [{ property: ids.finishedDate, direction: "descending" }],
+  // Finished table view — create_database parent must be page_id (block_id not supported by API)
+  const finishedFilter = statusFilterFn("Finished");
+  const finishedSort = [{ timestamp: "last_edited_time", direction: "descending" }];
+  views.finishedTable = await makeView("Finished", "table", {
+    create_database: { parent: { type: "page_id", page_id: pageId } },
+    filter: finishedFilter,
+    sorts: finishedSort,
     configuration: {
       type: "table",
       properties: viewPropertyConfiguration(ids, ["title", "score", "finishedDate", "summary", "author", "tags", "cover", "doubanLink"]),
     },
   });
   const finishedLinkedDatabaseId = views.finishedTable.parent?.database_id || databaseId;
-  views.finishedGallery = await createView(token, {
-    data_source_id: dataSourceId,
-    name: "Finished Gallery",
-    type: "gallery",
+
+  // Finished gallery view
+  views.finishedGallery = await makeView("Finished Gallery", "gallery", {
     database_id: finishedLinkedDatabaseId,
-    filter: statusFilter("Finished"),
-    sorts: [{ property: ids.finishedDate, direction: "descending" }],
+    filter: finishedFilter,
+    sorts: finishedSort,
     configuration: {
       type: "gallery",
-      cover: { type: "property", property_id: ids.cover },
+      cover: ids.cover ? { type: "property", property_id: ids.cover } : undefined,
       cover_aspect: "contain",
     },
   });
-  views.toReadTable = await createView(token, {
-    data_source_id: dataSourceId,
-    name: "To Read List",
-    type: "table",
-    create_database: { parent: { type: "block_id", block_id: toReadColumn || pageId } },
-    filter: statusFilter("To read list"),
+
+  // To Read List table view
+  views.toReadTable = await makeView("To Read List", "table", {
+    create_database: { parent: { type: "page_id", page_id: pageId } },
+    filter: statusFilterFn("To read list"),
     configuration: {
       type: "table",
       properties: viewPropertyConfiguration(ids, ["title", "tags", "doubanLink", "progress"]),
