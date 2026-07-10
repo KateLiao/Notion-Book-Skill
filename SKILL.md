@@ -57,16 +57,26 @@ Use Notion API version `2026-03-11` for setup and views. Use data source APIs fo
 Use this path when the user gives book titles that are not yet in Notion, especially phrasing like "添加到书籍总览", "开始跟踪这些书", "To read list", or "Reading".
 
 1. Load config and locate the source data source/database.
-2. Query existing pages before creating anything.
+2. Research and verify metadata before writing whenever network access is available.
+   - Use Douban subject suggest first for Chinese books.
+   - Prefer an exact normalized title match. If multiple exact matches exist and the user did not specify an edition, prefer the newest publication year.
+   - Use the title plus author hint when the title is ambiguous or translated. Use `--lookup-title` when the Notion title differs from the catalog title.
+   - Verify author, Douban link, total pages, tags, summary, and cover URL before writing.
+   - Read `references/cover-sources.md` before finding or repairing a cover.
+   - Prefer original cover files from the author or publisher, then stable retailer CDNs, then a directly accessible Douban image.
+   - Do not use Open Library, Google Books, or search-engine image proxies for automatic cover discovery. They may help identify an edition, but their cover paths are too unreliable for writeback.
+   - Pass a verified high-priority candidate with `--cover-url` and `--cover-source`. The script validates it and falls back to a valid Douban image when available.
+   - Use `--replace-cover` only when the user explicitly asks to repair or replace an existing cover. Never use it for routine fill-only enrichment.
+3. Query existing pages before creating anything.
    - First try exact title lookup.
    - For batches, compare normalized titles with whitespace removed.
    - If a record exists, update only empty fields and report that it already existed.
-3. Create new records with:
+4. Create new records with:
    - `Name`: exact user title unless a correction is obvious
    - `Status`: requested status, default `Reading`
    - `已读页数`: `0`
-   - metadata fields only when verified
-4. Leave `Score /5` and `完成阅读的日期` empty unless the user provides them.
+   - all verified metadata fields available from the source: author, tags, summary, Douban link, total pages, and cover image
+5. Leave `Score /5` and `完成阅读的日期` empty unless the user provides them.
 
 ## Completing Existing Book Fields
 
@@ -82,7 +92,7 @@ Treat these as empty:
 
 Research missing metadata conservatively. Use Douban subject suggest to identify the edition, then verify ISBN, publisher, pages, author, and edition details where possible. Use concise, neutral summaries and do not paste long copyrighted descriptions.
 
-Before writing a cover URL, fetch it without a referer and confirm HTTP 200, an image content type, non-trivial bytes, and an image-like signature when possible.
+Before writing a cover URL, fetch it without a referer and require HTTP 200, an image content type, at least 2 KB, and a JPEG/PNG/GIF/WebP signature. If all candidates fail, skip only the cover and report every attempted source.
 
 ## Apple Books Highlights And Notes
 

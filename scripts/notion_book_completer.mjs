@@ -472,23 +472,271 @@ export async function findBookByNormalizedTitle(token, target, title) {
   return pages.filter((page) => normalizeBookTitle(pageTitle(page, titleProperty)) === wanted);
 }
 
-export async function verifyImageUrl(url) {
-  const response = await fetch(url, { headers: { "user-agent": "Mozilla/5.0" } });
-  const bytes = Buffer.from(await response.arrayBuffer());
-  const contentType = response.headers.get("content-type") || "";
+export const DISABLED_COVER_DISCOVERY_SOURCES = new Set(["open-library", "google-books"]);
+
+export function detectImageSignature(bytes) {
+  const hex = bytes.slice(0, 12).toString("hex");
+  if (hex.startsWith("ffd8ff")) return "jpeg";
+  if (hex.startsWith("89504e470d0a1a0a")) return "png";
+  if (hex.startsWith("474946383761") || hex.startsWith("474946383961")) return "gif";
+  if (bytes.slice(0, 4).toString("ascii") === "RIFF" && bytes.slice(8, 12).toString("ascii") === "WEBP") return "webp";
+  return null;
+}
+
+export async function verifyImageUrl(url, { maxAttempts = 2, timeoutMs = 15_000 } = {}) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, reason: "invalid-url", url };
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return { ok: false, reason: "unsupported-protocol", url };
+  }
+
+  let lastResult = { ok: false, reason: "fetch-failed", url };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(parsed, {
+        headers: {
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const bytes = Buffer.from(await response.arrayBuffer());
+      const contentType = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      const imageType = detectImageSignature(bytes);
+      const ok = response.status === 200
+        && contentType.startsWith("image/")
+        && bytes.length >= 2_048
+        && Boolean(imageType);
+      lastResult = {
+        ok,
+        reason: ok ? undefined : "not-a-valid-image",
+        status: response.status,
+        contentType,
+        bytes: bytes.length,
+        imageType,
+        signature: bytes.slice(0, 12).toString("hex"),
+        url: response.url || url,
+        attempt,
+      };
+      if (ok || (response.status < 500 && response.status !== 429)) return lastResult;
+    } catch (error) {
+      lastResult = {
+        ok: false,
+        reason: error.name === "TimeoutError" ? "timeout" : "fetch-failed",
+        url,
+        attempt,
+      };
+    }
+  }
+  return lastResult;
+}
+
+export async function selectVerifiedCover(candidates = []) {
+  const attempts = [];
+  const seen = new Set();
+  const ordered = [...candidates]
+    .filter((candidate) => candidate?.url)
+    .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+
+  for (const candidate of ordered) {
+    const source = String(candidate.source || "unknown").trim().toLowerCase().replace(/[\s_]+/g, "-");
+    let provider = source;
+    try {
+      const hostname = new URL(candidate.url).hostname.toLowerCase();
+      if (hostname === "covers.openlibrary.org") provider = "open-library";
+      if (hostname === "books.google.com" || hostname === "www.googleapis.com") provider = "google-books";
+    } catch {
+      // URL validity is reported by verifyImageUrl below.
+    }
+    if (DISABLED_COVER_DISCOVERY_SOURCES.has(source) || DISABLED_COVER_DISCOVERY_SOURCES.has(provider)) {
+      attempts.push({ source, provider, url: candidate.url, ok: false, reason: "disabled-source" });
+      continue;
+    }
+    if (seen.has(candidate.url)) continue;
+    seen.add(candidate.url);
+    const check = await verifyImageUrl(candidate.url);
+    attempts.push({ source, ...check });
+    if (check.ok) {
+      return { url: check.url || candidate.url, source, verified: true, attempts };
+    }
+  }
+
+  return { url: null, source: null, verified: false, attempts };
+}
+
+export function decodeHtmlEntities(value = "") {
+  return value
+    .replaceAll("&nbsp;", " ")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
+export function stripHtml(value = "") {
+  return decodeHtmlEntities(value.replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function doubanHeaders() {
   return {
-    ok: response.status === 200 && contentType.startsWith("image/") && bytes.length > 1000,
-    status: response.status,
-    contentType,
-    bytes: bytes.length,
-    signature: bytes.slice(0, 8).toString("hex"),
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    accept: "text/html,application/xhtml+xml,application/json",
   };
 }
 
-export async function patchOnlyEmptyProperties(token, page, desiredProperties) {
+function exactTitleSuggestions(suggestions, title) {
+  const wanted = normalizeBookTitle(title);
+  return suggestions.filter((item) => normalizeBookTitle(item.title || "") === wanted);
+}
+
+export async function fetchDoubanSuggestions(title) {
+  const url = new URL("https://book.douban.com/j/subject_suggest");
+  url.searchParams.set("q", title);
+  const response = await fetch(url, { headers: doubanHeaders() });
+  if (!response.ok) throw new Error(`豆瓣 suggest 查询失败：HTTP ${response.status}`);
+  const suggestions = await response.json();
+  const exact = exactTitleSuggestions(suggestions, title);
+  const candidates = exact.length > 0 ? exact : suggestions;
+  return candidates
+    .filter((item) => item.type === "b" && item.id)
+    .sort((a, b) => Number(b.year || 0) - Number(a.year || 0));
+}
+
+function extractMetaContent(html, property) {
+  const pattern = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']*)["']`, "i");
+  return decodeHtmlEntities(html.match(pattern)?.[1] || "");
+}
+
+function extractInfoValue(html, label) {
+  const info = html.match(/<div id="info"[^>]*>([\s\S]*?)<\/div>/)?.[1] || "";
+  const pattern = new RegExp(`<span class=["']pl["']>\\s*${label}\\s*:?\\s*<\\/span>\\s*([\\s\\S]*?)(?:<br\\s*\\/?>|<\\/span>)`, "i");
+  return stripHtml(info.match(pattern)?.[1] || "").replace(/^[\s:：]+/, "");
+}
+
+function extractDoubanTags(html) {
+  const criteria = html.match(/criteria\s*=\s*'([^']*)'/)?.[1] || "";
+  return [...criteria.matchAll(/7:([^|']+)/g)]
+    .map((match) => decodeHtmlEntities(match[1]).trim())
+    .filter(Boolean)
+    .filter((tag) => !/^\d{4}$/.test(tag))
+    .slice(0, 4);
+}
+
+function extractIntro(html) {
+  const headingIndex = html.search(/内容简介/);
+  if (headingIndex < 0) return "";
+  const nextHeadingIndex = html.indexOf("<h2", headingIndex + 4);
+  const section = html.slice(headingIndex, nextHeadingIndex > headingIndex ? nextHeadingIndex : undefined);
+  const intro = section.match(/<div class="intro">([\s\S]*?)<\/div>/)?.[1] || "";
+  return stripHtml(intro).slice(0, 280);
+}
+
+export async function fetchDoubanBookMetadata(title) {
+  const [candidate] = await fetchDoubanSuggestions(title);
+  if (!candidate) return { found: false, title };
+
+  const url = `https://book.douban.com/subject/${candidate.id}/`;
+  const response = await fetch(url, { headers: doubanHeaders() });
+  if (!response.ok) throw new Error(`豆瓣详情页查询失败：HTTP ${response.status}`);
+  const html = await response.text();
+
+  const author = extractInfoValue(html, "作者") || candidate.author_name || "";
+  const totalPagesText = extractInfoValue(html, "页数");
+  const totalPages = Number.parseInt(totalPagesText.replace(/[^\d]/g, ""), 10);
+  const coverUrl = extractMetaContent(html, "og:image") || candidate.pic || "";
+  const tags = extractDoubanTags(html);
+  const summary = extractIntro(html);
+
+  const metadata = {
+    found: true,
+    title: candidate.title || title,
+    author,
+    doubanLink: url,
+    totalPages: Number.isFinite(totalPages) ? totalPages : undefined,
+    tags,
+    summary,
+    coverUrl,
+    coverVerified: false,
+  };
+
+  if (coverUrl) {
+    const cover = await selectVerifiedCover([{ url: coverUrl, source: "douban", priority: 20 }]);
+    metadata.coverUrl = cover.url;
+    metadata.coverVerified = cover.verified;
+    metadata.coverSource = cover.source;
+    metadata.coverAttempts = cover.attempts;
+  }
+
+  return metadata;
+}
+
+export async function resolveBookMetadata(title, options = {}) {
+  const lookupTitle = options.lookupTitle || title;
+  let metadata = { found: false, title };
+  try {
+    metadata = await fetchDoubanBookMetadata(lookupTitle);
+  } catch (error) {
+    metadata = { found: false, title, error: error.message };
+  }
+
+  const tags = options.tags?.length ? options.tags : metadata.tags;
+  const totalPages = options.totalPages != null ? options.totalPages : metadata.totalPages;
+  const coverCandidates = [];
+  if (options.coverUrl) {
+    coverCandidates.push({
+      url: options.coverUrl,
+      source: options.coverSource || "official",
+      priority: 100,
+    });
+  }
+  if (metadata.coverUrl) {
+    coverCandidates.push({ url: metadata.coverUrl, source: metadata.coverSource || "douban", priority: 20 });
+  }
+  const cover = await selectVerifiedCover(coverCandidates);
+
+  return {
+    ...metadata,
+    found: Boolean(metadata.found || options.author || options.summary || tags?.length || totalPages != null || cover.verified),
+    title,
+    author: options.author || metadata.author,
+    tags,
+    summary: options.summary || metadata.summary,
+    doubanLink: options.doubanLink || metadata.doubanLink,
+    totalPages,
+    coverUrl: cover.url,
+    coverVerified: cover.verified,
+    coverSource: cover.source,
+    coverAttempts: cover.attempts,
+  };
+}
+
+export function metadataProperties(metadata, propertyMap = CANONICAL_PROPERTIES) {
+  const properties = {};
+  if (metadata.author) properties[propertyMap.author || "Author"] = textProperty(metadata.author);
+  if (metadata.tags?.length) properties[propertyMap.tags || "Tags"] = multiSelectProperty(metadata.tags);
+  if (metadata.summary) properties[propertyMap.summary || "Summary"] = textProperty(metadata.summary);
+  if (metadata.doubanLink) properties[propertyMap.doubanLink || "豆瓣Link"] = { url: metadata.doubanLink };
+  if (metadata.totalPages != null) properties[propertyMap.totalPages || "总页数"] = { number: metadata.totalPages };
+  if (metadata.coverUrl && metadata.coverVerified) {
+    properties[propertyMap.cover || "书籍封面"] = externalCoverFile(`${metadata.title || "book"}-封面.jpg`, metadata.coverUrl);
+  }
+  return properties;
+}
+
+export async function patchOnlyEmptyProperties(token, page, desiredProperties, { replaceCover = false } = {}) {
   const properties = {};
   for (const [name, value] of Object.entries(desiredProperties)) {
-    if (isEmptyNotionProperty(page.properties?.[name])) {
+    const existing = page.properties?.[name];
+    if (isEmptyNotionProperty(existing) || (replaceCover && existing?.type === "files" && value?.files)) {
       properties[name] = value;
     }
   }
@@ -538,8 +786,10 @@ export function resolveScriptDir(importMetaUrl) {
 
 function usage() {
   console.error("Usage:");
-  console.error("  node scripts/notion_book_completer.mjs add-books [--status Reading] [--env-path .env] <title1> [title2 ...]");
-  console.error("  node scripts/notion_book_completer.mjs complete-metadata [--env-path .env] <title1> [title2 ...]");
+  console.error("  node scripts/notion_book_completer.mjs add-books [options] <title1> [title2 ...]");
+  console.error("  node scripts/notion_book_completer.mjs complete-metadata [options] <title1> [title2 ...]");
+  console.error("  Options: --status, --lookup-title, --author, --tags, --summary, --total-pages, --douban-link, --cover-url, --cover-source, --replace-cover, --env-path");
+  console.error("  Add-books researches verified metadata by default and only writes empty fields on existing records.");
 }
 
 async function cli(argv) {
@@ -559,9 +809,19 @@ async function cli(argv) {
   }
 
   let status = "Reading";
+  const metadataOptions = {};
   const titles = [];
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--status") status = args[++i];
+    else if (args[i] === "--lookup-title") metadataOptions.lookupTitle = args[++i];
+    else if (args[i] === "--author") metadataOptions.author = args[++i];
+    else if (args[i] === "--tags") metadataOptions.tags = args[++i].split(/[,，|]/).map((tag) => tag.trim()).filter(Boolean);
+    else if (args[i] === "--summary") metadataOptions.summary = args[++i];
+    else if (args[i] === "--total-pages") metadataOptions.totalPages = Number.parseInt(args[++i], 10);
+    else if (args[i] === "--douban-link") metadataOptions.doubanLink = args[++i];
+    else if (args[i] === "--cover-url") metadataOptions.coverUrl = args[++i];
+    else if (args[i] === "--cover-source") metadataOptions.coverSource = args[++i];
+    else if (args[i] === "--replace-cover") metadataOptions.replaceCover = true;
     else if (args[i] === "--titles") {
       while (i + 1 < args.length && !args[i + 1].startsWith("--")) titles.push(args[++i]);
     } else if (!args[i].startsWith("--")) {
@@ -572,6 +832,12 @@ async function cli(argv) {
   if (titles.length === 0) {
     usage();
     process.exit(1);
+  }
+  if (titles.length > 1 && Object.keys(metadataOptions).length > 0) {
+    throw new Error("元数据覆盖参数一次只能用于一本书，避免把同一作者或封面误写到多本书。");
+  }
+  if (metadataOptions.totalPages != null && (!Number.isFinite(metadataOptions.totalPages) || metadataOptions.totalPages <= 0)) {
+    throw new Error("--total-pages 必须是正整数。");
   }
 
   const token = loadNotionToken(parsed.envPath || undefined);
@@ -587,16 +853,31 @@ async function cli(argv) {
     const results = [];
     for (const title of titles) {
       const pages = await findBookByNormalizedTitle(token, target, title);
-      results.push(
-        pages.length === 0
-          ? { title, error: "未在数据库中找到此书" }
-          : {
-              title,
-              pageId: pages[0].id,
-              url: pages[0].url,
-              note: "请让 Agent 先检索并验证作者、标签、摘要、豆瓣链接、页数、封面 URL；然后只补空字段。",
-            },
+      if (pages.length === 0) {
+        results.push({ title, error: "未在数据库中找到此书" });
+        continue;
+      }
+      const metadata = await resolveBookMetadata(title, metadataOptions);
+      if (!metadata.found) {
+        results.push({ title, pageId: pages[0].id, url: pages[0].url, error: "未找到可验证的书籍元数据" });
+        continue;
+      }
+      const patch = await patchOnlyEmptyProperties(
+        token,
+        pages[0],
+        metadataProperties(metadata, target.propertyMap || CANONICAL_PROPERTIES),
+        { replaceCover: metadataOptions.replaceCover },
       );
+      results.push({
+        title,
+        pageId: pages[0].id,
+        url: pages[0].url,
+        changedFields: patch.changedFields,
+        skippedFields: patch.skipped,
+        coverWritten: Boolean(metadata.coverUrl && metadata.coverVerified),
+        coverSource: metadata.coverSource,
+        coverAttempts: metadata.coverAttempts,
+      });
     }
     console.log(JSON.stringify(results, null, 2));
     return;
@@ -604,12 +885,42 @@ async function cli(argv) {
 
   const results = [];
   for (const title of titles) {
-    const result = await createTrackedReadingBook(token, target, { title, status, readPages: 0 });
+    const metadata = await resolveBookMetadata(title, metadataOptions);
+    const metadataPatch = metadata.found ? metadataProperties(metadata, target.propertyMap || CANONICAL_PROPERTIES) : {};
+    const result = await createTrackedReadingBook(token, target, {
+      title,
+      status,
+      readPages: 0,
+      ...(metadata.found
+        ? {
+            author: metadata.author,
+            tags: metadata.tags,
+            summary: metadata.summary,
+            doubanLink: metadata.doubanLink,
+            totalPages: metadata.totalPages,
+            coverUrl: metadata.coverVerified ? metadata.coverUrl : undefined,
+          }
+        : {}),
+    });
+    let changedFields = [];
+    let skippedFields = [];
+    if (result.action === "existing" && Object.keys(metadataPatch).length > 0) {
+      const patch = await patchOnlyEmptyProperties(token, result.page, metadataPatch, { replaceCover: metadataOptions.replaceCover });
+      changedFields = patch.changedFields;
+      skippedFields = patch.skipped;
+    }
     results.push({
       title,
       action: result.action,
       pageId: result.page.id,
       url: result.page.url,
+      metadataFound: Boolean(metadata.found),
+      metadataError: metadata.error,
+      changedFields,
+      skippedFields,
+      coverWritten: Boolean(metadata.found && metadata.coverUrl && metadata.coverVerified),
+      coverSource: metadata.coverSource,
+      coverAttempts: metadata.coverAttempts,
     });
   }
   console.log(JSON.stringify(results, null, 2));
