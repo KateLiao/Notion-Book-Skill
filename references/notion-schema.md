@@ -18,6 +18,28 @@ Create a page titled `Reading` under the user-provided parent page. Add:
 
 Do not copy any user's existing book rows into a public template.
 
+## Canonical Book Page Body
+
+Every newly created book page should start with this reusable note scaffold:
+
+- Toggleable `heading_3`: `Apple Books 高亮与笔记`
+  - Placeholder paragraph: `尚未导入 Apple Books 标注。`
+- Divider
+- Toggleable `heading_3`: `批注与草稿`
+  - Blank paragraph for in-progress reading thoughts
+- Divider
+- Toggleable `heading_3`: `读书笔记`
+  - `heading_4`: `一、这本书整体在谈什么？`
+  - Blank paragraph
+  - `heading_4`: `二、作者具体是怎样展开他的观点的？`
+  - Blank paragraph
+  - `heading_4`: `三、作者说得对吗？`
+  - Blank paragraph
+  - `heading_4`: `这和我有什么关系？`
+  - Blank paragraph
+
+Apple Books import may create or refresh only the `Apple Books 高亮与笔记` module. It must not edit the sibling `批注与草稿` or `读书笔记` modules.
+
 ## Data Source
 
 Create a data source named `书籍总览` with these canonical properties:

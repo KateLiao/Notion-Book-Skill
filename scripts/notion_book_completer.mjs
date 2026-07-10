@@ -180,6 +180,73 @@ export function titleText(content) {
   return [{ type: "text", text: { content } }];
 }
 
+export const BOOK_NOTE_SECTIONS = {
+  appleBooks: "Apple Books 高亮与笔记",
+  drafts: "批注与草稿",
+  notes: "读书笔记",
+};
+
+export const READING_NOTE_PROMPTS = [
+  "一、这本书整体在谈什么？",
+  "二、作者具体是怎样展开他的观点的？",
+  "三、作者说得对吗？",
+  "这和我有什么关系？",
+];
+
+export function emptyParagraphBlock() {
+  return {
+    object: "block",
+    type: "paragraph",
+    paragraph: { rich_text: [] },
+  };
+}
+
+export function toggleHeading3Block(title, children = []) {
+  return {
+    object: "block",
+    type: "heading_3",
+    heading_3: {
+      rich_text: [text(title)],
+      is_toggleable: true,
+      ...(children.length > 0 ? { children } : {}),
+    },
+  };
+}
+
+export function bookNoteTemplateBlocks() {
+  return [
+    toggleHeading3Block(BOOK_NOTE_SECTIONS.appleBooks, [
+      {
+        object: "block",
+        type: "paragraph",
+        paragraph: { rich_text: [text("尚未导入 Apple Books 标注。")] },
+      },
+    ]),
+    {
+      object: "block",
+      type: "divider",
+      divider: {},
+    },
+    toggleHeading3Block(BOOK_NOTE_SECTIONS.drafts, [emptyParagraphBlock()]),
+    {
+      object: "block",
+      type: "divider",
+      divider: {},
+    },
+    toggleHeading3Block(
+      BOOK_NOTE_SECTIONS.notes,
+      READING_NOTE_PROMPTS.flatMap((prompt) => [
+        {
+          object: "block",
+          type: "heading_4",
+          heading_4: { rich_text: [text(prompt)] },
+        },
+        emptyParagraphBlock(),
+      ]),
+    ),
+  ];
+}
+
 export function normalizeId(id = "") {
   return String(id).replaceAll("-", "");
 }
@@ -460,6 +527,7 @@ export async function createTrackedReadingBook(token, target, book) {
   const page = await notionRequest(token, "POST", "/pages", {
     parent,
     properties: bookProperties(book, target.propertyMap || CANONICAL_PROPERTIES),
+    children: book.includeTemplate === false ? undefined : bookNoteTemplateBlocks(),
   });
   return { action: "created", page };
 }

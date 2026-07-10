@@ -1,7 +1,7 @@
 interface:
   display_name: "Notion Book"
-  short_description: "Set up and maintain a Notion reading database"
-  default_prompt: "Use this Notion Book skill to set up or manage my Notion reading database without overwriting existing content."
+  short_description: "Set up Notion reading, book-note scaffolds, and Apple Books deduped sync"
+  default_prompt: "Use this Notion Book skill to set up or manage my Notion reading database, create book-note scaffolds, and sync Apple Books highlights only inside the Apple Books module without overwriting existing content."
 
 platform:
   name: "openclaw"
@@ -9,4 +9,3 @@ platform:
   recommended_skill_dir:
     macos: "~/.openclaw/skills/notion-book"
     windows: "%USERPROFILE%\\.openclaw\\skills\\notion-book"
-

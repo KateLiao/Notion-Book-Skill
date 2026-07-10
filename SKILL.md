@@ -96,16 +96,38 @@ Before writing:
    - `~/Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation/AEAnnotation_v10312011_1727_local.sqlite`
    - `~/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary/BKLibrary-1-091020131601.sqlite`
 4. Find or create the Notion book page.
-5. Skip duplicate imports by checking for a heading exactly named `Apple Books 高亮与笔记`.
+5. Locate or create only the `Apple Books 高亮与笔记` module. It must be a toggleable `heading_3` when newly created.
+6. Never edit the sibling modules `批注与草稿` or `读书笔记` during Apple Books import.
+7. Skip duplicate imports by comparing existing quote text inside the `Apple Books 高亮与笔记` module before appending new annotations.
 
-Append page-body content as Notion blocks:
+Format the `Apple Books 高亮与笔记` module like the user's sample:
 
-- One heading named `Apple Books 高亮与笔记`
+- One toggleable `heading_3` named `Apple Books 高亮与笔记`
 - One paragraph with the imported annotation count
-- Each annotation as a quote block
-- Selected text first
-- If a note exists, add a blank line, bold `我的笔记：`, then the note
+- Each selected excerpt as a Notion `quote` block
+- If a user note exists, put it in the following paragraph, not inside the quote
+- Bold only `我的笔记：` in that paragraph
 - Append the creation date in gray text when available
+- Add empty paragraph separators between annotation groups
+
+For repeated pulls, append only new annotations. With `--force`, refresh only the children of the `Apple Books 高亮与笔记` module.
+
+## Book Page Note Template
+
+When creating a new book page, initialize the page body with:
+
+- Toggleable `heading_3`: `Apple Books 高亮与笔记`
+- Divider
+- Toggleable `heading_3`: `批注与草稿`
+- Divider
+- Toggleable `heading_3`: `读书笔记`
+
+Inside `读书笔记`, create these `heading_4` prompts with blank paragraphs beneath them:
+
+- `一、这本书整体在谈什么？`
+- `二、作者具体是怎样展开他的观点的？`
+- `三、作者说得对吗？`
+- `这和我有什么关系？`
 
 ## Scripts
 
