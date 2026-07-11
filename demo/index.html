@@ -1,0 +1,1557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notion Book Completer Skill</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+    <style>
+        /* ===========================================
+           CSS CUSTOM PROPERTIES
+           Change these variables to retheme the deck.
+           =========================================== */
+        :root {
+            --stage-bg: #d8e9ff;
+            --slide-bg: #f9f6f1;
+            --ink: #1d2633;
+            --muted: #6e7e91;
+            --blue: #3f78c8;
+            --blue-soft: #9fc8fb;
+            --blue-ice: #dfeeff;
+            --green: #7fb99a;
+            --red: #e95a5a;
+            --paper: rgba(255, 255, 255, 0.86);
+            --line: rgba(63, 120, 200, 0.24);
+            --shadow: 0 28px 70px rgba(61, 95, 137, 0.2);
+            --font-display: 'Noto Sans SC', sans-serif;
+            --font-body: 'Noto Sans SC', sans-serif;
+            --font-serif: 'ZCOOL XiaoWei', serif;
+            --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+            --duration-normal: 0.68s;
+        }
+
+        /* ===========================================
+           BASE RESET
+           Keeps authored 1920 x 1080 layout predictable.
+           =========================================== */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* ===========================================
+           FIXED 16:9 STAGE: MANDATORY BASE STYLES
+           Include this ENTIRE file in every presentation.
+           Slides are authored at 1920×1080 and scaled as a whole.
+           =========================================== */
+
+        /* 1. Lock the browser viewport */
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: var(--stage-bg, #000);
+        }
+
+        /* 2. Full-window deck viewport */
+        .deck-viewport {
+            position: fixed;
+            inset: 0;
+            overflow: hidden;
+            background: var(--stage-bg, #000);
+        }
+
+        /* 3. Fixed 16:9 design canvas.
+           JavaScript sets transform: translate(...) scale(...). */
+        .deck-stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+            transform-origin: 0 0;
+            background: var(--slide-bg, #fff);
+        }
+
+        /* 4. Slides stack inside the fixed stage.
+           Content must be laid out at 1920×1080, not reflowed per device. */
+        .slide {
+            position: absolute;
+            inset: 0;
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+            display: block;
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+            background: var(--slide-bg, #fff);
+        }
+
+        .slide.active,
+        .slide.visible {
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
+            z-index: 1;
+        }
+
+        /* 5. Keep media inside authored slide bounds */
+        img,
+        video,
+        canvas,
+        svg {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        /* 6. Presentation chrome stays outside the slide design system */
+        .deck-controls {
+            position: fixed;
+            left: 50%;
+            bottom: 22px;
+            transform: translateX(-50%);
+            z-index: 1000;
+        }
+
+        /* 7. Print one fixed-size slide per page */
+        @media print {
+            html,
+            body {
+                width: 1920px;
+                height: auto;
+                overflow: visible;
+                background: #fff;
+            }
+
+            .deck-viewport {
+                position: static;
+                overflow: visible;
+                background: #fff;
+            }
+
+            .deck-stage {
+                position: static;
+                width: auto;
+                height: auto;
+                transform: none !important;
+                background: none;
+            }
+
+            .slide {
+                position: relative;
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                pointer-events: auto !important;
+                width: 1920px;
+                height: 1080px;
+                break-after: page;
+                page-break-after: always;
+            }
+
+            .slide:last-child {
+                break-after: auto;
+                page-break-after: auto;
+            }
+
+            .deck-controls {
+                display: none !important;
+            }
+        }
+
+        /* 8. Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.2s !important;
+            }
+        }
+
+        /* ===========================================
+           SHIRO READING CARD VISUAL SYSTEM
+           Soft paper, blue annotation lines, and Notion-like panels.
+           =========================================== */
+        body {
+            color: var(--ink);
+            font-family: var(--font-body);
+        }
+
+        .slide {
+            padding: 74px 92px;
+            background:
+                linear-gradient(90deg, rgba(63, 120, 200, 0.05) 1px, transparent 1px) 0 0 / 52px 52px,
+                linear-gradient(rgba(63, 120, 200, 0.05) 1px, transparent 1px) 0 0 / 52px 52px,
+                radial-gradient(circle at 93% 90%, rgba(122, 182, 250, 0.34), transparent 19%),
+                radial-gradient(circle at 2% 98%, rgba(122, 182, 250, 0.18), transparent 20%),
+                linear-gradient(145deg, #fffaf4 0%, #f6f9fd 56%, #edf6ff 100%);
+        }
+
+        .slide::before {
+            content: "";
+            position: absolute;
+            inset: 28px;
+            border: 3px solid rgba(63, 120, 200, 0.12);
+            border-radius: 48px;
+            pointer-events: none;
+        }
+
+        .slide::after {
+            content: "";
+            position: absolute;
+            right: -64px;
+            bottom: -74px;
+            width: 390px;
+            height: 390px;
+            border-radius: 110px;
+            border: 38px solid rgba(63, 120, 200, 0.22);
+            transform: rotate(-18deg);
+            pointer-events: none;
+        }
+
+        .ornaments {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .dot-grid {
+            position: absolute;
+            width: 220px;
+            height: 122px;
+            background-image: radial-gradient(rgba(63, 120, 200, 0.23) 3px, transparent 3px);
+            background-size: 28px 28px;
+        }
+
+        .dot-grid.top-left { left: 260px; top: 70px; }
+        .dot-grid.top-right { right: 170px; top: 112px; }
+        .stripe {
+            position: absolute;
+            width: 190px;
+            height: 18px;
+            background: repeating-linear-gradient(115deg, rgba(63, 120, 200, 0.48) 0 8px, transparent 8px 24px);
+            opacity: 0.58;
+        }
+        .stripe.top { left: 520px; top: 76px; }
+        .stripe.bottom { right: 162px; bottom: 112px; }
+        .rail {
+            position: absolute;
+            width: 4px;
+            height: 232px;
+            border-radius: 99px;
+            background: linear-gradient(var(--blue-soft), rgba(63, 120, 200, 0.08));
+        }
+        .rail.left { left: 90px; top: 260px; }
+        .rail.right { right: 108px; top: 458px; }
+        .bead {
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(145deg, #e8f4ff, #4f95df);
+            box-shadow: 0 8px 18px rgba(63, 120, 200, 0.32);
+        }
+        .bead.a { left: 78px; top: 760px; }
+        .bead.b { left: 680px; bottom: 76px; }
+        .bead.c { right: 138px; bottom: 234px; }
+
+        .kicker {
+            color: var(--blue);
+            font-size: 24px;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        h1,
+        h2 {
+            color: var(--blue);
+            font-family: var(--font-display);
+            font-weight: 900;
+            letter-spacing: 0;
+            line-height: 1.05;
+        }
+
+        h1 {
+            font-size: 116px;
+            max-width: 1280px;
+        }
+
+        h2 {
+            font-size: 76px;
+            max-width: 1280px;
+        }
+
+        .subtitle {
+            color: #618bc7;
+            font-size: 36px;
+            font-weight: 800;
+            line-height: 1.45;
+            max-width: 1240px;
+        }
+
+        .body {
+            color: var(--ink);
+            font-size: 30px;
+            font-weight: 500;
+            line-height: 1.48;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .paper-card {
+            background: var(--paper);
+            border: 1px solid rgba(63, 120, 200, 0.13);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .notion-card {
+            background: #fff;
+            border: 1px solid rgba(29, 38, 51, 0.08);
+            border-radius: 18px;
+            box-shadow: 0 22px 46px rgba(28, 51, 86, 0.18);
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 48px;
+            padding: 8px 20px 10px;
+            border-radius: 999px;
+            color: var(--blue);
+            background: rgba(223, 238, 255, 0.82);
+            border: 1px solid rgba(63, 120, 200, 0.22);
+            font-size: 22px;
+            font-weight: 800;
+        }
+
+        .mono-label {
+            color: var(--blue);
+            font-size: 22px;
+            font-weight: 900;
+            letter-spacing: 0.06em;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1.02fr 0.98fr;
+            gap: 54px;
+            align-items: center;
+        }
+
+        .screen-frame {
+            position: relative;
+            overflow: hidden;
+            border-radius: 30px;
+            box-shadow: 0 26px 60px rgba(41, 74, 111, 0.26);
+            background: white;
+        }
+
+        .screen-frame img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* ===========================================
+           ANIMATIONS
+           Slide elements reveal with gentle paper-like motion.
+           =========================================== */
+        .reveal,
+        .reveal-left,
+        .reveal-scale {
+            opacity: 0;
+            transition:
+                opacity var(--duration-normal) var(--ease-out-expo),
+                transform var(--duration-normal) var(--ease-out-expo),
+                filter var(--duration-normal) var(--ease-out-expo);
+        }
+
+        .reveal { transform: translateY(34px); }
+        .reveal-left { transform: translateX(-42px); }
+        .reveal-scale { transform: scale(0.94); filter: blur(4px); }
+
+        .slide.visible .reveal,
+        .slide.visible .reveal-left,
+        .slide.visible .reveal-scale {
+            opacity: 1;
+            transform: translate(0, 0) scale(1);
+            filter: blur(0);
+        }
+
+        .d1 { transition-delay: 0.08s; }
+        .d2 { transition-delay: 0.18s; }
+        .d3 { transition-delay: 0.28s; }
+        .d4 { transition-delay: 0.38s; }
+        .d5 { transition-delay: 0.48s; }
+
+        /* ===========================================
+           SLIDE-SPECIFIC LAYOUTS
+           Each layout is authored directly at 1920 x 1080.
+           =========================================== */
+        .title-layout {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 1.08fr 0.92fr;
+            gap: 70px;
+            height: 100%;
+            align-items: center;
+        }
+
+        .title-stack {
+            padding-left: 38px;
+        }
+
+        .title-stack h1 {
+            margin-top: 30px;
+            margin-bottom: 36px;
+        }
+
+        .title-meta {
+            display: flex;
+            gap: 18px;
+            flex-wrap: wrap;
+            margin-top: 52px;
+        }
+
+        .hero-window {
+            height: 742px;
+            padding: 24px;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+        }
+
+        .hero-gallery-image {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: center;
+            border-radius: 16px;
+            border: 1px solid rgba(29, 38, 51, 0.08);
+            background: #fff;
+        }
+
+        .library-bar {
+            height: 178px;
+            border-radius: 20px;
+            background:
+                linear-gradient(90deg, rgba(0,0,0,0.42), transparent),
+                url('assets/reading-overview.png') center 61% / 132% auto no-repeat;
+        }
+
+        .book-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 18px;
+            margin-top: 30px;
+        }
+
+        .book-tile {
+            height: 190px;
+            border-radius: 16px;
+            background: #f6f6f4;
+            border: 1px solid rgba(29, 38, 51, 0.08);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .book-cover {
+            width: 76px;
+            height: 102px;
+            border-radius: 8px;
+            box-shadow: 0 8px 18px rgba(0,0,0,0.18);
+        }
+
+        .book-cover.yellow { background: linear-gradient(160deg, #f4c84d, #f7ef9e); }
+        .book-cover.cream { background: linear-gradient(160deg, #eee1d1, #ffffff); }
+        .book-cover.red { background: linear-gradient(160deg, #ee4e2d, #fff2df); }
+        .book-cover.black { background: linear-gradient(160deg, #111, #cf2828); }
+        .book-cover.white { background: linear-gradient(160deg, #fff, #d7d4ca); }
+
+        .section-head {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            gap: 22px;
+            margin: 34px 0 46px;
+        }
+
+        .problem-board {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 28px;
+            margin-top: 70px;
+        }
+
+        .problem-card {
+            min-height: 430px;
+            padding: 38px;
+        }
+
+        .problem-card .icon {
+            width: 86px;
+            height: 86px;
+            border-radius: 26px;
+            display: grid;
+            place-items: center;
+            color: #fff;
+            background: linear-gradient(145deg, #4b88d7, #9fcbff);
+            font-size: 44px;
+            font-weight: 900;
+            margin-bottom: 34px;
+        }
+
+        .problem-card h3,
+        .feature h3,
+        .field-row h3,
+        .rule-card h3,
+        .agent-card h3 {
+            color: var(--blue);
+            font-size: 34px;
+            font-weight: 900;
+            margin-bottom: 16px;
+            letter-spacing: 0;
+        }
+
+        .problem-card p,
+        .feature p,
+        .rule-card p,
+        .agent-card p {
+            color: var(--ink);
+            font-size: 27px;
+            font-weight: 500;
+            line-height: 1.46;
+        }
+
+        .feature-map {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 0.9fr 1.1fr;
+            gap: 48px;
+            align-items: stretch;
+            height: 570px;
+        }
+
+        .agent-card {
+            padding: 42px;
+        }
+
+        .agent-card.big {
+            min-height: 0;
+            height: 100%;
+        }
+
+        .agent-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-rows: repeat(2, minmax(0, 1fr));
+            gap: 20px;
+        }
+
+        .feature {
+            padding: 26px 28px;
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.78);
+            border-left: 7px solid var(--blue);
+        }
+
+        .feature h3 {
+            font-size: 31px;
+            margin-bottom: 12px;
+        }
+
+        .feature p {
+            font-size: 23px;
+            line-height: 1.4;
+        }
+
+        .schema-layout {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 750px 1fr;
+            gap: 56px;
+            align-items: center;
+        }
+
+        .metadata-image {
+            height: 650px;
+        }
+
+        .field-list {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 18px;
+        }
+
+        .field-row {
+            min-height: 160px;
+            padding: 24px 26px;
+            background: rgba(255, 255, 255, 0.84);
+            border-radius: 20px;
+            border: 1px solid rgba(63, 120, 200, 0.14);
+        }
+
+        .field-row p {
+            color: var(--ink);
+            font-size: 22px;
+            font-weight: 500;
+            line-height: 1.42;
+        }
+
+        .rule-layout {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 34px;
+            margin-top: 42px;
+        }
+
+        .rule-card {
+            min-height: 254px;
+            padding: 34px;
+        }
+
+        .rule-card.good {
+            border-top: 9px solid var(--green);
+        }
+
+        .rule-card.stop {
+            border-top: 9px solid var(--red);
+        }
+
+        .checkline {
+            display: flex;
+            align-items: flex-start;
+            gap: 18px;
+            color: var(--ink);
+            font-size: 30px;
+            font-weight: 800;
+            line-height: 1.35;
+            margin-top: 22px;
+        }
+
+        .checkline span {
+            display: grid;
+            place-items: center;
+            flex: 0 0 42px;
+            height: 42px;
+            border-radius: 50%;
+            color: #fff;
+            background: var(--blue);
+            font-size: 22px;
+        }
+
+        .apple-layout {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 1.02fr 0.98fr;
+            gap: 54px;
+            align-items: center;
+        }
+
+        .apple-image {
+            height: 660px;
+        }
+
+        .quote-stack {
+            display: grid;
+            gap: 22px;
+        }
+
+        .quote-card {
+            padding: 30px 34px;
+            border-left: 8px solid var(--blue);
+        }
+
+        .quote-card p {
+            font-size: 27px;
+            font-weight: 700;
+            line-height: 1.42;
+        }
+
+        .platform-row {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+            margin-top: 54px;
+        }
+
+        .platform-card {
+            min-height: 430px;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .platform-name {
+            color: var(--blue);
+            font-size: 50px;
+            font-weight: 900;
+        }
+
+        .platform-card p {
+            color: var(--ink);
+            font-size: 28px;
+            font-weight: 600;
+            line-height: 1.45;
+        }
+
+        .workflow {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 20px;
+            margin-top: 72px;
+        }
+
+        .step {
+            min-height: 312px;
+            padding: 30px;
+            position: relative;
+        }
+
+        .step::after {
+            content: "";
+            position: absolute;
+            right: -19px;
+            top: 50%;
+            width: 20px;
+            height: 3px;
+            background: rgba(63, 120, 200, 0.45);
+        }
+
+        .step:last-child::after {
+            display: none;
+        }
+
+        .step-num {
+            color: rgba(63, 120, 200, 0.32);
+            font-size: 54px;
+            font-weight: 900;
+            margin-bottom: 42px;
+        }
+
+        .step h3 {
+            color: var(--blue);
+            font-size: 30px;
+            font-weight: 900;
+            margin-bottom: 16px;
+        }
+
+        .step p {
+            color: var(--ink);
+            font-size: 22px;
+            font-weight: 500;
+            line-height: 1.42;
+        }
+
+        /* ===========================================
+           REAL AGENT EXECUTION TRACE
+           Pairs the actual book request with the verified writeback steps.
+           =========================================== */
+        .section-head.execution-head {
+            margin-bottom: 30px;
+        }
+
+        .execution-layout {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 510px 1fr;
+            gap: 44px;
+            align-items: stretch;
+            height: 610px;
+        }
+
+        .execution-book-card {
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .execution-book-top {
+            display: grid;
+            grid-template-columns: 178px 1fr;
+            gap: 26px;
+            align-items: center;
+        }
+
+        .execution-cover {
+            width: 178px;
+            height: 284px;
+            object-fit: cover;
+            border-radius: 8px;
+            box-shadow: 0 18px 38px rgba(29, 38, 51, 0.24);
+            background: #fff;
+        }
+
+        .execution-book-meta h3 {
+            color: var(--ink);
+            font-size: 46px;
+            font-weight: 900;
+            line-height: 1.08;
+            margin-bottom: 18px;
+        }
+
+        .execution-book-meta p {
+            color: var(--muted);
+            font-size: 25px;
+            font-weight: 700;
+            line-height: 1.4;
+            margin-bottom: 24px;
+        }
+
+        .request-note {
+            padding: 24px 26px;
+            border-left: 7px solid var(--blue);
+            border-radius: 8px;
+            background: rgba(223, 238, 255, 0.7);
+            color: var(--ink);
+            font-size: 24px;
+            font-weight: 800;
+            line-height: 1.45;
+        }
+
+        .execution-result {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: auto;
+            padding-top: 20px;
+            border-top: 1px solid rgba(29, 38, 51, 0.1);
+            color: var(--muted);
+            font-size: 21px;
+            font-weight: 800;
+        }
+
+        .execution-result strong {
+            color: var(--blue);
+            font-size: 26px;
+        }
+
+        .execution-trace {
+            display: grid;
+            grid-template-rows: repeat(4, 1fr);
+            gap: 16px;
+        }
+
+        .trace-step {
+            position: relative;
+            display: grid;
+            grid-template-columns: 74px 1fr 176px;
+            gap: 22px;
+            align-items: center;
+            padding: 18px 28px;
+            min-height: 136px;
+            border-left: 7px solid var(--blue);
+        }
+
+        .trace-step::after {
+            content: "";
+            position: absolute;
+            left: 57px;
+            bottom: -18px;
+            width: 3px;
+            height: 18px;
+            background: rgba(63, 120, 200, 0.44);
+        }
+
+        .trace-step:last-child::after {
+            display: none;
+        }
+
+        .trace-index {
+            display: grid;
+            place-items: center;
+            width: 58px;
+            height: 58px;
+            border-radius: 50%;
+            color: #fff;
+            background: var(--blue);
+            font-size: 22px;
+            font-weight: 900;
+        }
+
+        .trace-copy h3 {
+            color: var(--blue);
+            font-size: 29px;
+            font-weight: 900;
+            margin-bottom: 8px;
+        }
+
+        .trace-copy p {
+            color: var(--ink);
+            font-size: 20px;
+            font-weight: 600;
+            line-height: 1.38;
+        }
+
+        .trace-status {
+            justify-self: end;
+            width: 168px;
+            padding: 12px 14px;
+            border-radius: 8px;
+            color: #356b53;
+            background: rgba(127, 185, 154, 0.2);
+            border: 1px solid rgba(80, 146, 111, 0.25);
+            text-align: center;
+            font-size: 19px;
+            font-weight: 900;
+        }
+
+        .closing-layout {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 1fr 520px;
+            gap: 70px;
+            height: 100%;
+            align-items: center;
+        }
+
+        .closing-layout h2 {
+            font-size: 94px;
+            max-width: 1120px;
+            margin: 26px 0 28px;
+        }
+
+        .mini-window {
+            padding: 36px;
+            min-height: 560px;
+        }
+
+        .mini-window-title {
+            color: var(--ink);
+            font-size: 38px;
+            font-weight: 900;
+            margin-bottom: 28px;
+        }
+
+        .mini-line {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 68px;
+            border-bottom: 1px solid rgba(29, 38, 51, 0.08);
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .mini-tag {
+            color: var(--blue);
+            background: var(--blue-ice);
+            border-radius: 12px;
+            padding: 8px 14px;
+            font-size: 20px;
+            font-weight: 900;
+        }
+
+        /* ===========================================
+           PRESENTATION CHROME
+           Navigation controls and inline editing UI.
+           =========================================== */
+        .progress-wrap {
+            position: fixed;
+            left: 50%;
+            bottom: 26px;
+            transform: translateX(-50%);
+            z-index: 1200;
+            width: 380px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.55);
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(29, 38, 51, 0.14);
+        }
+
+        .progress {
+            height: 100%;
+            width: 0;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--blue), var(--blue-soft));
+            transition: width 0.35s var(--ease-out-expo);
+        }
+
+        .page-count {
+            position: fixed;
+            right: 28px;
+            bottom: 20px;
+            z-index: 1200;
+            color: rgba(29, 38, 51, 0.62);
+            font-family: var(--font-body);
+            font-size: 16px;
+            font-weight: 800;
+        }
+
+        .edit-hotzone {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 90px;
+            height: 90px;
+            z-index: 10000;
+            cursor: pointer;
+        }
+
+        .edit-toggle {
+            position: fixed;
+            top: 18px;
+            left: 18px;
+            width: 44px;
+            height: 44px;
+            border: 0;
+            border-radius: 50%;
+            color: #fff;
+            background: var(--blue);
+            box-shadow: 0 14px 34px rgba(63, 120, 200, 0.32);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 10001;
+            cursor: pointer;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        .edit-toggle.show,
+        .edit-toggle.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .edit-toggle.active {
+            transform: scale(1.08);
+            background: #1f5da9;
+        }
+
+        .save-toast {
+            position: fixed;
+            top: 20px;
+            left: 78px;
+            z-index: 10002;
+            padding: 10px 16px;
+            border-radius: 999px;
+            color: var(--ink);
+            background: rgba(255,255,255,0.92);
+            border: 1px solid rgba(63, 120, 200, 0.18);
+            opacity: 0;
+            transform: translateY(-6px);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .save-toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .editing [data-editable="true"] {
+            outline: 2px dashed rgba(63, 120, 200, 0.55);
+            outline-offset: 7px;
+            border-radius: 6px;
+            cursor: text;
+        }
+    </style>
+</head>
+<body>
+    <div class="deck-viewport" aria-label="Notion Book Completer presentation">
+        <main class="deck-stage" id="deckStage">
+            <section class="slide active">
+                <div class="ornaments">
+                    <div class="dot-grid top-left"></div><div class="dot-grid top-right"></div>
+                    <div class="stripe top"></div><div class="stripe bottom"></div>
+                    <div class="rail left"></div><div class="rail right"></div>
+                    <div class="bead a"></div><div class="bead b"></div><div class="bead c"></div>
+                </div>
+                <div class="title-layout">
+                    <div class="title-stack">
+                        <div class="kicker reveal-left d1" data-editable="true">NOTION READING SKILL</div>
+                        <h1 class="reveal-left d2" data-editable="true">Notion Book Completer</h1>
+                        <p class="subtitle reveal-left d3" data-editable="true">把阅读数据库从“手动维护的模板”，升级成“会持续帮你补全、校验、同步的 Agent Skill”。</p>
+                        <div class="title-meta reveal d4">
+                            <span class="pill" data-editable="true">阅读任务可见</span>
+                            <span class="pill" data-editable="true">元数据自动补全</span>
+                            <span class="pill" data-editable="true">Apple Books 标注同步</span>
+                        </div>
+                    </div>
+                    <div class="hero-window notion-card reveal-scale d3">
+                        <img class="hero-gallery-image" src="assets/reading-gallery-current.png" alt="Notion 在读书籍画廊">
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-right"></div><div class="stripe top"></div><div class="rail left"></div><div class="bead b"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">WHY THIS EXISTS</div>
+                    <h2 class="reveal-left d2" data-editable="true">读书模板好看，但维护很磨人</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">真正费时间的不是建一个 Notion 页面，而是让每本书长期保持“有信息、能回顾、不会乱”。</p>
+                </div>
+                <div class="problem-board">
+                    <div class="problem-card paper-card reveal d2">
+                        <div class="icon">1</div>
+                        <h3 data-editable="true">字段太多</h3>
+                        <p data-editable="true">作者、状态、页数、封面、摘要、标签、豆瓣链接……每本书都要重复补一遍。</p>
+                    </div>
+                    <div class="problem-card paper-card reveal d3">
+                        <div class="icon">2</div>
+                        <h3 data-editable="true">数据不可靠</h3>
+                        <p data-editable="true">封面链接会失效，页数版本不同，摘要容易复制太长，最后数据库越来越脏。</p>
+                    </div>
+                    <div class="problem-card paper-card reveal d4">
+                        <div class="icon">3</div>
+                        <h3 data-editable="true">笔记散落</h3>
+                        <p data-editable="true">Apple Books 的高亮、自己的批注、Notion 读书笔记分散在不同地方，复盘时找不到上下文。</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-left"></div><div class="stripe bottom"></div><div class="rail right"></div><div class="bead a"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">WHAT IT DOES</div>
+                    <h2 class="reveal-left d2" data-editable="true">它不是模板，是阅读数据库管家</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">Notion Book Completer 会连接你的 Notion Reading 数据库，执行初始化、校验、补全、导入与去重。</p>
+                </div>
+                <div class="feature-map">
+                    <div class="agent-card big paper-card reveal-scale d2">
+                        <span class="pill" data-editable="true">Agent Skill</span>
+                        <h3 style="font-size:56px;margin-top:34px;" data-editable="true">把“维护动作”封装成可重复调用的能力</h3>
+                        <p style="font-size:31px;margin-top:28px;" data-editable="true">你只要说“添加这些书”“补全缺失信息”“导入 Apple Books 标注”，skill 会按既定规则检查 Notion、读取本地数据、写回正确位置。</p>
+                    </div>
+                    <div class="agent-list">
+                        <div class="feature reveal d2"><h3 data-editable="true">首次设置</h3><p data-editable="true">创建 Reading 页面、书籍总览数据库、视图与标准字段。</p></div>
+                        <div class="feature reveal d3"><h3 data-editable="true">添加书籍</h3><p data-editable="true">批量创建或匹配已有条目，避免重复页面。</p></div>
+                        <div class="feature reveal d4"><h3 data-editable="true">补全空字段</h3><p data-editable="true">查找作者、摘要、标签、总页数、封面、外部链接。</p></div>
+                        <div class="feature reveal d5"><h3 data-editable="true">导入标注</h3><p data-editable="true">把 Apple Books 高亮与“我的笔记”同步到对应书籍页面。</p></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-right"></div><div class="stripe top"></div><div class="rail left"></div><div class="bead c"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">DATABASE SCHEMA</div>
+                    <h2 class="reveal-left d2" data-editable="true">图书图鉴：字段让阅读轨迹可见</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">参考你已有的 Notion 图书页，skill 会围绕这些核心字段建立和维护数据结构。</p>
+                </div>
+                <div class="schema-layout">
+                    <div class="screen-frame metadata-image reveal-scale d2">
+                        <img src="assets/metadata-map.png" alt="Notion 图书图鉴字段标注参考图">
+                    </div>
+                    <div class="field-list">
+                        <div class="field-row reveal d2"><h3 data-editable="true">阅读状态</h3><p data-editable="true">Reading、To read、Done 等阶段，让当前阅读任务一眼可见。</p></div>
+                        <div class="field-row reveal d3"><h3 data-editable="true">作者与外链</h3><p data-editable="true">记录作者、豆瓣或其他书籍链接，方便继续查证。</p></div>
+                        <div class="field-row reveal d3"><h3 data-editable="true">摘要与标签</h3><p data-editable="true">给未来的自己留下“为什么值得读”的简短线索。</p></div>
+                        <div class="field-row reveal d4"><h3 data-editable="true">页数与进度</h3><p data-editable="true">通过已读页数、总页数和公式字段可视化进度。</p></div>
+                        <div class="field-row reveal d4"><h3 data-editable="true">评分与完成日期</h3><p data-editable="true">支持复盘筛选，但不会替你随便填写主观评价。</p></div>
+                        <div class="field-row reveal d5"><h3 data-editable="true">书籍封面</h3><p data-editable="true">写入前校验图片 URL，避免首页图鉴变成坏图。</p></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-left"></div><div class="stripe bottom"></div><div class="rail right"></div><div class="bead b"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">CORE RULE</div>
+                    <h2 class="reveal-left d2" data-editable="true">只补空缺，不覆盖你的判断</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">这是这个 skill 最重要的边界：自动化负责繁琐信息，你保留阅读记录的主权。</p>
+                </div>
+                <div class="rule-layout">
+                    <div class="rule-card good paper-card reveal d2">
+                        <h3 data-editable="true">它会做</h3>
+                        <p data-editable="true">仅填写空字段或明确损坏的内容，例如缺失作者、摘要、标签、总页数、封面 URL。</p>
+                        <div class="checkline"><span>✓</span><div data-editable="true">写入前先查重、先校验、先确认字段是否为空。</div></div>
+                    </div>
+                    <div class="rule-card stop paper-card reveal d3">
+                        <h3 data-editable="true">它不会做</h3>
+                        <p data-editable="true">不会覆盖你的评分、阅读状态、进度、日期、笔记、标签和已经写好的摘要。</p>
+                        <div class="checkline"><span>!</span><div data-editable="true">除非你明确要求，否则不替你改动已有内容。</div></div>
+                    </div>
+                    <div class="rule-card good paper-card reveal d4">
+                        <h3 data-editable="true">它会验证</h3>
+                        <p data-editable="true">封面链接必须可访问、返回图片内容且不是空响应，才会写入 Notion。</p>
+                    </div>
+                    <div class="rule-card good paper-card reveal d5">
+                        <h3 data-editable="true">它会去重</h3>
+                        <p data-editable="true">添加书籍前查已有页面，导入 Apple Books 前比较已存在 quote，避免重复导入。</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-right"></div><div class="stripe top"></div><div class="rail left"></div><div class="bead a"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">APPLE BOOKS IMPORT</div>
+                    <h2 class="reveal-left d2" data-editable="true">把高亮和“我的笔记”带回书籍页</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">macOS 上可以读取 Apple Books 本地数据库，把标注同步进对应 Notion 书籍页面。</p>
+                </div>
+                <div class="apple-layout">
+                    <div class="screen-frame apple-image reveal-scale d2">
+                        <img src="assets/apple-books.png" alt="Apple Books 高亮与笔记导入参考图">
+                    </div>
+                    <div class="quote-stack">
+                        <div class="quote-card paper-card reveal d2"><p data-editable="true">新建或定位模块：<br><strong>Apple Books 高亮与笔记</strong></p></div>
+                        <div class="quote-card paper-card reveal d3"><p data-editable="true">高亮内容写成 quote block，保留阅读时的原句上下文。</p></div>
+                        <div class="quote-card paper-card reveal d4"><p data-editable="true">个人批注单独成段，只加粗“我的笔记：”，保持你习惯的格式。</p></div>
+                        <div class="quote-card paper-card reveal d5"><p data-editable="true">重复执行时只追加新标注，不重新污染已有笔记。</p></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-left"></div><div class="stripe bottom"></div><div class="rail right"></div><div class="bead c"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">MULTI-AGENT READY</div>
+                    <h2 class="reveal-left d2" data-editable="true">一个阅读系统，多个 Agent 都能接上</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">它被设计成可复用的个人技能包，而不是只在某一次对话里跑通的脚本。</p>
+                </div>
+                <div class="platform-row">
+                    <div class="platform-card paper-card reveal d2">
+                        <div class="platform-name" data-editable="true">Codex</div>
+                        <p data-editable="true">通过本地 skill 调用，适合在当前工作区持续维护 Notion Reading 数据库。</p>
+                        <span class="pill">openai.yaml</span>
+                    </div>
+                    <div class="platform-card paper-card reveal d3">
+                        <div class="platform-name" data-editable="true">Hermes</div>
+                        <p data-editable="true">保留独立 metadata 与调用名，让同一套能力能迁移到另一个 Agent 环境。</p>
+                        <span class="pill">hermes.yaml</span>
+                    </div>
+                    <div class="platform-card paper-card reveal d4">
+                        <div class="platform-name" data-editable="true">OpenClaw</div>
+                        <p data-editable="true">支持作为本地 skill 安装，兼顾 macOS 与 Windows 的路径和配置差异。</p>
+                        <span class="pill">openclaw.yaml</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-right"></div><div class="stripe top"></div><div class="rail left"></div><div class="bead b"></div>
+                </div>
+                <div class="section-head">
+                    <div class="kicker reveal-left d1" data-editable="true">HOW YOU USE IT</div>
+                    <h2 class="reveal-left d2" data-editable="true">一句话触发一条维护流程</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">最好的体验是：你不用记字段结构，只要描述阅读动作，skill 负责把动作落到 Notion 数据库。</p>
+                </div>
+                <div class="workflow">
+                    <div class="step paper-card reveal d1"><div class="step-num">01</div><h3 data-editable="true">连接</h3><p data-editable="true">读取 .env 或本地配置，找到 Reading 数据库。</p></div>
+                    <div class="step paper-card reveal d2"><div class="step-num">02</div><h3 data-editable="true">校验</h3><p data-editable="true">检查字段、视图、数据源 API 版本是否可用。</p></div>
+                    <div class="step paper-card reveal d3"><div class="step-num">03</div><h3 data-editable="true">匹配</h3><p data-editable="true">先查已有书籍，避免重复创建页面。</p></div>
+                    <div class="step paper-card reveal d4"><div class="step-num">04</div><h3 data-editable="true">补全</h3><p data-editable="true">只写入缺失且已验证的信息。</p></div>
+                    <div class="step paper-card reveal d5"><div class="step-num">05</div><h3 data-editable="true">回报</h3><p data-editable="true">用中文说明新增、跳过、修复和仍需你判断的内容。</p></div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-left"></div><div class="stripe bottom"></div><div class="rail right"></div><div class="bead c"></div>
+                </div>
+                <div class="section-head execution-head">
+                    <div class="kicker reveal-left d1" data-editable="true">REAL AGENT RUN</div>
+                    <h2 class="reveal-left d2" data-editable="true">一次真实执行：添加《如何生活》</h2>
+                    <p class="subtitle reveal-left d3" data-editable="true">从一句自然语言请求开始，Agent 完成版本匹配、字段补全、封面校验、Notion 写入与回读确认。</p>
+                </div>
+                <div class="execution-layout">
+                    <div class="execution-book-card paper-card reveal-scale d2">
+                        <div class="execution-book-top">
+                            <img class="execution-cover" src="assets/how-to-live-cover.jpg" alt="How to Live by Derek Sivers book cover">
+                            <div class="execution-book-meta">
+                                <h3 data-editable="true">如何生活</h3>
+                                <p data-editable="true">德里克·西弗斯</p>
+                                <span class="pill" data-editable="true">To read list</span>
+                            </div>
+                        </div>
+                        <div class="request-note" data-editable="true">“把《如何生活》——德里克·西弗斯加入待读，并补全所有字段。”</div>
+                        <div class="execution-result">
+                            <span data-editable="true">最终写入</span>
+                            <strong data-editable="true">7 个字段 + 笔记模板</strong>
+                        </div>
+                    </div>
+                    <div class="execution-trace">
+                        <div class="trace-step paper-card reveal d2">
+                            <div class="trace-index">01</div>
+                            <div class="trace-copy"><h3 data-editable="true">识别请求并查重</h3><p data-editable="true">保留用户指定书名，定位书籍总览；确认没有同名记录后创建新页面。</p></div>
+                            <div class="trace-status" data-editable="true">新页面已创建</div>
+                        </div>
+                        <div class="trace-step paper-card reveal d3">
+                            <div class="trace-index">02</div>
+                            <div class="trace-copy"><h3 data-editable="true">匹配书籍版本</h3><p data-editable="true">用 How to Live + Derek Sivers 命中豆瓣原版条目，核对作者、链接、标签与 115 页版本。</p></div>
+                            <div class="trace-status" data-editable="true">元数据命中</div>
+                        </div>
+                        <div class="trace-step paper-card reveal d4">
+                            <div class="trace-index">03</div>
+                            <div class="trace-copy"><h3 data-editable="true">筛选并验证封面</h3><p data-editable="true">排除占位图与配额路径，选择稳定零售商 CDN；连续两次确认 JPEG、HTTP 200 与真实文件签名。</p></div>
+                            <div class="trace-status" data-editable="true">封面验证通过</div>
+                        </div>
+                        <div class="trace-step paper-card reveal d5">
+                            <div class="trace-index">04</div>
+                            <div class="trace-copy"><h3 data-editable="true">写入后回读验收</h3><p data-editable="true">状态、0 页进度、作者、标签、摘要、豆瓣链接、页数和封面齐全，三个笔记模块同步创建。</p></div>
+                            <div class="trace-status" data-editable="true">端到端成功</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="slide">
+                <div class="ornaments">
+                    <div class="dot-grid top-left"></div><div class="dot-grid top-right"></div>
+                    <div class="stripe top"></div><div class="stripe bottom"></div>
+                    <div class="rail left"></div><div class="rail right"></div>
+                    <div class="bead a"></div><div class="bead b"></div><div class="bead c"></div>
+                </div>
+                <div class="closing-layout">
+                    <div>
+                        <div class="kicker reveal-left d1" data-editable="true">THE POINT</div>
+                        <h2 class="reveal-left d2" data-editable="true">让阅读记录变成会自己长出来的系统</h2>
+                        <p class="subtitle reveal-left d3" data-editable="true">Notion 负责承载结构，Agent Skill 负责执行维护动作；你负责真正读书、判断、回顾。</p>
+                        <div class="title-meta reveal d4">
+                            <span class="pill" data-editable="true">少一点整理负担</span>
+                            <span class="pill" data-editable="true">多一点复盘线索</span>
+                        </div>
+                    </div>
+                    <div class="mini-window notion-card reveal-scale d3">
+                        <div class="mini-window-title" data-editable="true">阅读 | Reading</div>
+                        <div class="mini-line"><span>深度工作</span><span class="mini-tag">29%</span></div>
+                        <div class="mini-line"><span>作者</span><span>卡尔·纽波特</span></div>
+                        <div class="mini-line"><span>摘要</span><span class="mini-tag">已补全</span></div>
+                        <div class="mini-line"><span>封面</span><span class="mini-tag">已验证</span></div>
+                        <div class="mini-line"><span>Apple Books</span><span class="mini-tag">新标注 8</span></div>
+                        <div class="mini-line"><span>已有笔记</span><span class="mini-tag">保留</span></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="progress-wrap" aria-hidden="true"><div class="progress" id="progress"></div></div>
+    <div class="page-count" id="pageCount" aria-live="polite"></div>
+    <div class="edit-hotzone" aria-hidden="true"></div>
+    <button class="edit-toggle" id="editToggle" title="编辑模式 (E)" aria-label="切换编辑模式">E</button>
+    <div class="save-toast" id="saveToast">已保存到浏览器</div>
+
+    <script>
+        /* ===========================================
+           SLIDE PRESENTATION CONTROLLER
+           Handles scaling, navigation, and progress.
+           =========================================== */
+        class SlidePresentation {
+            constructor() {
+                this.slides = Array.from(document.querySelectorAll('.slide'));
+                this.currentSlide = 0;
+                this.stage = document.getElementById('deckStage');
+                this.progress = document.getElementById('progress');
+                this.pageCount = document.getElementById('pageCount');
+                this.lastWheelAt = 0;
+                this.touchStartX = 0;
+                this.touchStartY = 0;
+                this.setupStageScale();
+                this.setupKeyboardNav();
+                this.setupTouchNav();
+                this.setupWheelNav();
+                this.showSlide(0);
+            }
+
+            setupStageScale() {
+                const scale = () => {
+                    const factor = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+                    const x = (window.innerWidth - 1920 * factor) / 2;
+                    const y = (window.innerHeight - 1080 * factor) / 2;
+                    this.stage.style.transform = `translate(${x}px, ${y}px) scale(${factor})`;
+                };
+                scale();
+                window.addEventListener('resize', scale);
+            }
+
+            setupKeyboardNav() {
+                document.addEventListener('keydown', (event) => {
+                    if (event.target && event.target.getAttribute('contenteditable') === 'true') return;
+                    const nextKeys = ['ArrowRight', 'ArrowDown', ' ', 'PageDown'];
+                    const prevKeys = ['ArrowLeft', 'ArrowUp', 'PageUp'];
+                    if (nextKeys.includes(event.key)) {
+                        event.preventDefault();
+                        this.next();
+                    }
+                    if (prevKeys.includes(event.key)) {
+                        event.preventDefault();
+                        this.prev();
+                    }
+                    if (event.key === 'Home') this.showSlide(0);
+                    if (event.key === 'End') this.showSlide(this.slides.length - 1);
+                });
+            }
+
+            setupTouchNav() {
+                window.addEventListener('touchstart', (event) => {
+                    this.touchStartX = event.changedTouches[0].screenX;
+                    this.touchStartY = event.changedTouches[0].screenY;
+                }, { passive: true });
+                window.addEventListener('touchend', (event) => {
+                    const dx = event.changedTouches[0].screenX - this.touchStartX;
+                    const dy = event.changedTouches[0].screenY - this.touchStartY;
+                    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy)) {
+                        dx < 0 ? this.next() : this.prev();
+                    }
+                }, { passive: true });
+            }
+
+            setupWheelNav() {
+                window.addEventListener('wheel', (event) => {
+                    const now = Date.now();
+                    if (now - this.lastWheelAt < 720) return;
+                    if (Math.abs(event.deltaY) < 30) return;
+                    this.lastWheelAt = now;
+                    event.deltaY > 0 ? this.next() : this.prev();
+                }, { passive: true });
+            }
+
+            showSlide(index) {
+                this.currentSlide = Math.max(0, Math.min(index, this.slides.length - 1));
+                this.slides.forEach((slide, i) => {
+                    slide.classList.toggle('active', i === this.currentSlide);
+                    slide.classList.toggle('visible', i === this.currentSlide);
+                });
+                const pct = ((this.currentSlide + 1) / this.slides.length) * 100;
+                this.progress.style.width = `${pct}%`;
+                this.pageCount.textContent = `${this.currentSlide + 1} / ${this.slides.length}`;
+            }
+
+            next() { this.showSlide(this.currentSlide + 1); }
+            prev() { this.showSlide(this.currentSlide - 1); }
+        }
+
+        /* ===========================================
+           INLINE EDITOR
+           Press E or hover the top-left corner to edit text.
+           =========================================== */
+        class InlineEditor {
+            constructor() {
+                this.isActive = false;
+                this.storageKey = 'notion-book-completer-slides-edits';
+                this.editables = Array.from(document.querySelectorAll('[data-editable="true"]'));
+                this.toggle = document.getElementById('editToggle');
+                this.toast = document.getElementById('saveToast');
+                this.restore();
+                this.setupControls();
+            }
+
+            setupControls() {
+                this.toggle.addEventListener('click', () => this.toggleEditMode());
+                document.addEventListener('keydown', (event) => {
+                    if ((event.key === 'e' || event.key === 'E') && event.target.getAttribute('contenteditable') !== 'true') {
+                        this.toggleEditMode();
+                    }
+                    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+                        event.preventDefault();
+                        this.save();
+                    }
+                });
+                this.editables.forEach((node) => {
+                    node.addEventListener('input', () => this.save());
+                });
+            }
+
+            toggleEditMode() {
+                this.isActive = !this.isActive;
+                document.body.classList.toggle('editing', this.isActive);
+                this.toggle.classList.toggle('active', this.isActive);
+                this.toggle.classList.add('show');
+                this.editables.forEach((node) => {
+                    node.setAttribute('contenteditable', this.isActive ? 'true' : 'false');
+                });
+            }
+
+            save() {
+                const payload = this.editables.map((node) => node.innerHTML);
+                localStorage.setItem(this.storageKey, JSON.stringify(payload));
+                this.toast.classList.add('show');
+                clearTimeout(this.toastTimer);
+                this.toastTimer = setTimeout(() => this.toast.classList.remove('show'), 900);
+            }
+
+            restore() {
+                const raw = localStorage.getItem(this.storageKey);
+                if (!raw) return;
+                try {
+                    const payload = JSON.parse(raw);
+                    this.editables.forEach((node, index) => {
+                        if (typeof payload[index] === 'string') node.innerHTML = payload[index];
+                    });
+                } catch (error) {
+                    console.warn('Could not restore slide edits', error);
+                }
+            }
+        }
+
+        /* ===========================================
+           EDIT TOGGLE HOVER BEHAVIOR
+           Keeps the button reachable after leaving the hotzone.
+           =========================================== */
+        const presentation = new SlidePresentation();
+        const editor = new InlineEditor();
+        const hotzone = document.querySelector('.edit-hotzone');
+        const editToggle = document.getElementById('editToggle');
+        let hideTimeout = null;
+
+        hotzone.addEventListener('mouseenter', () => {
+            clearTimeout(hideTimeout);
+            editToggle.classList.add('show');
+        });
+        hotzone.addEventListener('mouseleave', () => {
+            hideTimeout = setTimeout(() => {
+                if (!editor.isActive) editToggle.classList.remove('show');
+            }, 400);
+        });
+        editToggle.addEventListener('mouseenter', () => {
+            clearTimeout(hideTimeout);
+        });
+        editToggle.addEventListener('mouseleave', () => {
+            hideTimeout = setTimeout(() => {
+                if (!editor.isActive) editToggle.classList.remove('show');
+            }, 400);
+        });
+        hotzone.addEventListener('click', () => editor.toggleEditMode());
+    </script>
+</body>
+</html>

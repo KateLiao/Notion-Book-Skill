@@ -1,5 +1,17 @@
 # Notion Book Completer
 
+<p align="center">
+  <a href="https://kateliao.github.io/Notion-Book-Skill/">
+    <img src="./references/slides-preview.png" width="100%" alt="Notion Book Completer 演示稿预览">
+  </a>
+</p>
+
+<p align="center">
+  <strong><a href="https://kateliao.github.io/Notion-Book-Skill/">在线播放完整演示</a></strong>
+  <br>
+  <sub>支持方向键、滚轮和触控翻页</sub>
+</p>
+
 **一句话：** 当你要在 Notion 里新建或维护阅读数据库、录入新书并补全元数据/封面，或把 Apple Books 高亮笔记导入书籍页面时，用这个 Codex Skill 让 AI 自动完成——且**只补空字段，不覆盖你已填写的内容**。
 
 Skill 指令本体使用英文，便于 Codex / Hermes / OpenClaw 稳定执行；本仓库的安装与 onboarding 文档使用中文。
